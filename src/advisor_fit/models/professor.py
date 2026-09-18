@@ -117,6 +117,7 @@ class ProfessorProfile(BaseModel):
     """组装后的导师画像：官方声明与论文观察分层。"""
 
     professor_id: str
+    identity_confirmed: bool = False
     name: FactValue = FactValue()
     institution: FactValue = FactValue()
     department: FactValue = FactValue()

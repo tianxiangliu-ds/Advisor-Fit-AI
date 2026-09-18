@@ -169,6 +169,7 @@ if "repo" not in st.session_state:
 
 st.header("① 上传并确认简历")
 uploaded = st.file_uploader("上传 CV（PDF，仅在本机解析）", type=["pdf"])
+student_name = st.text_input("你的姓名（可选，用于邮件落款）")
 if st.button("解析 CV", type="primary", disabled=uploaded is None):
     upload_path = settings.uploads_dir / f"{st.session_state.run_id}.pdf"
     upload_path.parent.mkdir(parents=True, exist_ok=True)
@@ -310,8 +311,11 @@ if st.button("生成报告与邮件草稿", type="primary", disabled=not can_gen
             papers=[ManualPaperInput(**values) for values in confirmed_papers],
         )
         with st.spinner("正在整理证据并生成报告…"):
+            student_for_pipeline = edited_student.model_copy(
+                update={"name": student_name.strip() or None}
+            )
             st.session_state.result = run_manual_pipeline(
-                student=edited_student,
+                student=student_for_pipeline,
                 confirmed_fact_ids=confirmed_fact_ids,
                 professor_input=professor_input,
                 llm=_llm(),

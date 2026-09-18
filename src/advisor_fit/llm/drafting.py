@@ -55,39 +55,54 @@ def generate_template_draft(
     student: StudentProfile, professor: ProfessorProfile
 ) -> Draft:
     """无 LLM 时的事实锁定模板；所有事实句都绑定来源 ID。"""
-    name = professor.name.value or professor.professor_id or "老师"
+    professor_label = professor.name.value or professor.professor_id or "老师"
+    student_name = student.name or "一名学生"
     sentences = [
-        DraftSentence(text=f"尊敬的{name}老师，您好！", sentence_type="GENERIC")
+        DraftSentence(text=f"尊敬的{professor_label}老师，您好！", sentence_type="GENERIC"),
+        DraftSentence(
+            text=f"我是{student_name}，想了解您的研究方向与招生安排。",
+            sentence_type="GENERIC",
+        ),
     ]
 
     facts = student.draftable_facts()
-    if facts:
-        fact = facts[0]
+    skills = [f for f in facts if f.field == "skill"]
+    interests = [f for f in facts if f.field == "interest"]
+
+    if skills:
         sentences.append(
             DraftSentence(
-                text=f"我的相关经历包括{fact.value}，希望进一步了解与之相关的研究机会。",
+                text=f"我掌握的技能包括{'、'.join(str(f.value) for f in skills)}。",
                 sentence_type="STUDENT_FACT",
-                fact_ids=[fact.id],
+                fact_ids=[f.id for f in skills],
+            )
+        )
+    if interests:
+        sentences.append(
+            DraftSentence(
+                text=f"我的研究兴趣包括{'、'.join(str(f.value) for f in interests)}。",
+                sentence_type="STUDENT_FACT",
+                fact_ids=[f.id for f in interests],
             )
         )
 
-    topics = [*professor.observed_recent_topics, *professor.declared_interests]
+    all_topics = [*professor.observed_recent_topics, *professor.declared_interests]
+    topics = [t for t in all_topics if t.evidence_ids][:3]
     if topics:
-        topic = topics[0]
         sentences.append(
             DraftSentence(
-                text=f"了解到您的公开研究涉及{topic.topic}，我希望进一步了解该方向。",
+                text=f"了解到您的公开研究涉及{'、'.join(t.topic for t in topics)}。",
                 sentence_type="PROFESSOR_FACT",
-                evidence_ids=topic.evidence_ids,
+                evidence_ids=[ev for t in topics for ev in t.evidence_ids],
             )
         )
-    elif professor.recent_publications:
-        publication = professor.recent_publications[0]
+    publications = [p for p in professor.recent_publications if p.source_ids][:3]
+    if publications:
         sentences.append(
             DraftSentence(
-                text=f"了解到您的公开研究成果包括《{publication.title}》，我希望进一步了解相关方向。",
+                text=f"您近年发表了{'、'.join(f'《{p.title}》' for p in publications)}等成果。",
                 sentence_type="PROFESSOR_FACT",
-                evidence_ids=publication.source_ids,
+                evidence_ids=[ev for p in publications for ev in p.source_ids],
             )
         )
 
@@ -97,6 +112,7 @@ def generate_template_draft(
             sentence_type="GENERIC",
         )
     )
+    sentences.append(DraftSentence(text=student_name, sentence_type="GENERIC"))
     return Draft(
         subject="咨询研究与招生机会",
         sentences=sentences,

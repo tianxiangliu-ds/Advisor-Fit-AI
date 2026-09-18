@@ -42,7 +42,7 @@ def _confirmed_student(
         fact.model_copy(update={"user_confirmed": fact.id in confirmed_fact_ids})
         for fact in student.facts
     ]
-    return student.model_copy(update={"student_id": student_id, "facts": facts, "name": None})
+    return student.model_copy(update={"student_id": student_id, "facts": facts})
 
 
 def _sanitize_draft(draft: Draft, validation: DraftValidationResult) -> Draft:

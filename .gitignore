@@ -1,0 +1,31 @@
+# 密钥与本地配置
+.env
+*.env.local
+
+# 本地数据与上传
+data/
+uploads/
+*.sqlite
+*.sqlite3
+*.db
+
+# 导出产物（含真实 CV / 报告，不入库）
+exports/
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+
+# 真实上传文件（测试只允许匿名 fixtures）
+*.pdf
+
+# IDE / 系统
+.idea/
+.vscode/
+.DS_Store

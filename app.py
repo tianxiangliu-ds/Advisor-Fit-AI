@@ -111,6 +111,25 @@ def _work_to_paper(work) -> dict:
     }
 
 
+_FIT_BADGES = {
+    "STRONG": "🟢 强",
+    "PARTIAL": "🟡 部分",
+    "WEAK": "🔴 弱",
+    "UNKNOWN": "⚪ 未知",
+}
+
+_REC_BADGES = {
+    "WORTH_CONTACTING": "✅ 值得联系",
+    "LEARN_MORE": "🔍 建议深入了解",
+    "LOW_PRIORITY": "⏸ 优先级较低",
+    "INSUFFICIENT_EVIDENCE": "⚪ 证据不足",
+}
+
+
+def _badge(mapping: dict, value: str) -> str:
+    return mapping.get(value, value)
+
+
 def _render_report(result) -> None:
     professor = result.professor
     st.subheader("导师画像")
@@ -141,8 +160,8 @@ def _render_report(result) -> None:
 
     st.subheader("匹配分析")
     report = result.match_report
-    st.write(f"研究匹配：**{report.research_fit.value}**")
-    st.write(f"建议：**{report.recommendation.value}**")
+    st.write(f"研究匹配：**{_badge(_FIT_BADGES, report.research_fit.value)}**")
+    st.write(f"建议：**{_badge(_REC_BADGES, report.recommendation.value)}**")
     st.write(f"证据充分度：{report.evidence_sufficiency}")
     st.write(f"招生机会信号：{report.opportunity_signal}")
     if report.strengths:

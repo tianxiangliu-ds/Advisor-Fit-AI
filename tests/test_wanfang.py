@@ -42,6 +42,9 @@ def test_wanfang_search_parses_documents():
                                 }
                             },
                             "DOI": {"stringValue": "10.11897/SP.J.1016.2017.01229"},
+                            "OrganizationNorm": {
+                                "listValue": {"values": [{"stringValue": "武汉大学"}]}
+                            },
                         }
                     }
                 ],
@@ -62,6 +65,8 @@ def test_wanfang_search_parses_documents():
     assert work.source_url == "https://doi.org/10.11897/SP.J.1016.2017.01229"
     assert work.topics == ["卷积神经网络", "深度学习"]
     assert work.source_platform == "万方"
+    assert work.authors == ["周飞燕", "金林鹏"]
+    assert work.institution == "武汉大学"
 
 
 def test_wanfang_search_adds_institution_and_sorts_by_year():

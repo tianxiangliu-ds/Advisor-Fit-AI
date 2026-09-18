@@ -108,6 +108,8 @@ def _work_to_paper(work) -> dict:
         "source_platform": work.source_platform or "万方",
         "keywords": work.topics or [],
         "user_confirmed": False,
+        "authors": work.authors,
+        "institution": work.institution,
     }
 
 
@@ -458,10 +460,13 @@ if st.button("🔍 检索候选论文（万方）"):
 if st.session_state.candidate_papers:
     st.caption(f"检索到 {len(st.session_state.candidate_papers)} 篇候选论文，勾选确认采用的：")
     for index, cand in enumerate(st.session_state.candidate_papers):
+        label = f"{cand['title']}（{cand['year'] or '年份未知'}）"
+        if cand.get("institution"):
+            label += f" · {cand['institution']}"
+        if cand.get("authors"):
+            label += f"〔{'、'.join(cand['authors'][:3])}〕"
         cand["user_confirmed"] = st.checkbox(
-            f"{cand['title']}（{cand['year'] or '年份未知'}）",
-            key=f"cand_paper_{index}",
-            help=cand["source_url"],
+            label, key=f"cand_paper_{index}", help=cand["source_url"]
         )
     paper_values.extend(
         [cand for cand in st.session_state.candidate_papers if cand["user_confirmed"]]
@@ -493,7 +498,12 @@ if st.button("生成报告与邮件草稿", type="primary", disabled=not can_gen
             email=professor_email or None,
             declared_interests=_split_terms(declared_interests_text),
             identity_confirmed=identity_confirmed,
-            papers=[ManualPaperInput(**values) for values in confirmed_papers],
+            papers=[
+                ManualPaperInput(
+                    **{k: v for k, v in values.items() if k not in ("authors", "institution")}
+                )
+                for values in confirmed_papers
+            ],
         )
         with st.spinner("正在整理证据并生成报告…"):
             student_for_pipeline = edited_student.model_copy(

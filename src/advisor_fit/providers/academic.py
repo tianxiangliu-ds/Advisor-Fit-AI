@@ -20,3 +20,5 @@ class Work(BaseModel):
     abstract: str = ""
     source_url: str | None = None
     source_platform: str | None = None
+    authors: list[str] = []
+    institution: str = ""

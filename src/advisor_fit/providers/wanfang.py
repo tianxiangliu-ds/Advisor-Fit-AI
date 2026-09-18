@@ -78,6 +78,7 @@ class WanfangProvider:
                 "DOI",
                 "Id",
                 "PeriodicalTitle",
+                "OrganizationNorm",
             ],
             "rows": limit,
             "sort": {"sorts": [{"by": "PublishYear", "order": "DESC"}]},
@@ -90,11 +91,13 @@ class WanfangProvider:
         resp.raise_for_status()
         documents = resp.json().get("documents", []) or []
         works: list[Work] = []
+        seen_titles: set[str] = set()
         for doc in documents:
             fields = doc.get("fields", {})
             title = _first_str(fields.get("Title"))
-            if not title:
+            if not title or title in seen_titles:
                 continue
+            seen_titles.add(title)
             year_str = _first_str(fields.get("PublishYear"))
             year = int(year_str) if year_str.isdigit() else None
             doi = _first_str(fields.get("DOI"))
@@ -114,6 +117,8 @@ class WanfangProvider:
                     source_url=source_url,
                     source_platform="万方",
                     topics=_all_str(fields.get("Keywords")),
+                    authors=_all_str(fields.get("Creator")),
+                    institution=_first_str(fields.get("OrganizationNorm")),
                 )
             )
         return works

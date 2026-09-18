@@ -98,6 +98,16 @@ class ManualProfessorInput(BaseModel):
         return cleaned
 
 
+def validate_paper_values(papers: list[dict]) -> list[str]:
+    """返回论文必填项缺失的友好错误信息（中文）；空列表表示齐全。"""
+    errors: list[str] = []
+    for index, paper in enumerate(papers, start=1):
+        for field, label in (("title", "标题"), ("abstract", "摘要"), ("source_url", "来源链接")):
+            if not str(paper.get(field) or "").strip():
+                errors.append(f"第 {index} 篇论文缺少「{label}」")
+    return errors
+
+
 class ManualMaterials(BaseModel):
     anchor: OfficialIdentityAnchor
     works: list[Work]

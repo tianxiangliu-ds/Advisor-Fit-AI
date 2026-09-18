@@ -19,7 +19,11 @@ from advisor_fit.ingest.cv import (
     extract_pdf_text,
 )
 from advisor_fit.ingest.cv_llm import build_student_profile_llm
-from advisor_fit.ingest.manual_professor import ManualPaperInput, ManualProfessorInput
+from advisor_fit.ingest.manual_professor import (
+    ManualPaperInput,
+    ManualProfessorInput,
+    validate_paper_values,
+)
 from advisor_fit.llm.provider import NullLLM, build_llm
 from advisor_fit.manual_pipeline import run_manual_pipeline
 from advisor_fit.storage.repository import Repository
@@ -52,7 +56,7 @@ def _reset_run() -> None:
     if run_id and repo is not None:
         repo.delete_run(run_id)
         delete_uploaded_cv(settings.uploads_dir, run_id)
-    for key in ("student", "fact_rows", "parsed_text", "result"):
+    for key in ("student", "student_fact_editor", "parsed_text", "result"):
         st.session_state.pop(key, None)
     _new_run()
 
@@ -136,7 +140,7 @@ st.caption("人工核实资料输入 · 本地优先 · 不依赖 OpenAlex · �
 
 for key, default in (
     ("student", None),
-    ("fact_rows", []),
+    ("student_fact_editor", []),
     ("parsed_text", ""),
     ("result", None),
 ):
@@ -155,7 +159,7 @@ if st.button("解析 CV", type="primary", disabled=uploaded is None):
     parsed = extract_pdf_text(upload_path)
     student = _build_student_profile(upload_path, parsed)
     st.session_state.student = student
-    st.session_state.fact_rows = _fact_rows(student)
+    st.session_state.student_fact_editor = _fact_rows(student)
     st.session_state.parsed_text = parsed.text
     if parsed.warnings:
         st.warning("；".join(parsed.warnings))
@@ -174,20 +178,19 @@ if student is None:
 else:
     st.caption("可以直接编辑、删除错误行，或在表格底部新增遗漏内容。")
     edited_rows = st.data_editor(
-        st.session_state.fact_rows,
+        key="student_fact_editor",
         num_rows="dynamic",
         hide_index=True,
         column_config={
-            "confirmed": st.column_config.CheckboxColumn("确认使用"),
+            "confirmed": st.column_config.CheckboxColumn("确认使用", width="small"),
             "field": st.column_config.SelectboxColumn(
                 "类型",
                 options=["skill", "degree", "institution", "interest", "project", "publication"],
+                width="small",
             ),
-            "value": st.column_config.TextColumn("内容"),
+            "value": st.column_config.TextColumn("内容", width="large"),
         },
-        key="student_fact_editor",
     )
-    st.session_state.fact_rows = edited_rows
     edited_student = apply_fact_edits(student, list(edited_rows))
     confirmed_fact_ids = edited_student.confirmed_fact_ids()
     if not confirmed_fact_ids:
@@ -243,6 +246,20 @@ for index in range(paper_count):
 
 can_generate = edited_student is not None and bool(confirmed_fact_ids)
 if st.button("生成报告与邮件草稿", type="primary", disabled=not can_generate):
+    if not professor_name.strip() or not institution.strip():
+        st.error("请填写「导师姓名」和「学校/单位」")
+        st.stop()
+    if not identity_confirmed:
+        st.error("请勾选「我已核对并确认以上信息属于目标导师」")
+        st.stop()
+    confirmed_papers = [values for values in paper_values if values["user_confirmed"]]
+    if not confirmed_papers:
+        st.error("请至少勾选确认一篇论文")
+        st.stop()
+    missing = validate_paper_values(confirmed_papers)
+    if missing:
+        st.error("；".join(missing))
+        st.stop()
     try:
         professor_input = ManualProfessorInput(
             name=professor_name,
@@ -253,7 +270,7 @@ if st.button("生成报告与邮件草稿", type="primary", disabled=not can_gen
             email=professor_email or None,
             declared_interests=_split_terms(declared_interests_text),
             identity_confirmed=identity_confirmed,
-            papers=[ManualPaperInput(**values) for values in paper_values],
+            papers=[ManualPaperInput(**values) for values in confirmed_papers],
         )
         with st.spinner("正在整理证据并生成报告…"):
             st.session_state.result = run_manual_pipeline(

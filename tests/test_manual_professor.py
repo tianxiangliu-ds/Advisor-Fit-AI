@@ -9,6 +9,7 @@ from advisor_fit.ingest.manual_professor import (
     ManualPaperInput,
     ManualProfessorInput,
     build_manual_materials,
+    validate_paper_values,
 )
 
 
@@ -93,3 +94,23 @@ def test_manual_materials_require_confirmed_identity_and_one_confirmed_paper():
         build_manual_materials(unconfirmed_identity, id_prefix="run123")
     with pytest.raises(ValueError, match="至少确认一篇论文"):
         build_manual_materials(no_confirmed_paper, id_prefix="run123")
+
+
+def test_validate_paper_values_reports_missing_required_fields():
+    errors = validate_paper_values(
+        [
+            {"title": "有标题", "abstract": "", "source_url": "https://x"},
+            {"title": "", "abstract": "有摘要", "source_url": ""},
+        ]
+    )
+    assert errors == [
+        "第 1 篇论文缺少「摘要」",
+        "第 2 篇论文缺少「标题」",
+        "第 2 篇论文缺少「来源链接」",
+    ]
+
+
+def test_validate_paper_values_returns_empty_when_complete():
+    assert validate_paper_values(
+        [{"title": "T", "abstract": "A", "source_url": "https://x"}]
+    ) == []

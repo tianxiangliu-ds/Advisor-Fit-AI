@@ -434,7 +434,7 @@ for index in range(paper_count):
         )
 
 st.markdown("**或从万方检索候选论文（可选，需联网 + 万方 appkey）**")
-st.caption("检索结果仅供参考，必须由你确认归属后才可用；万方覆盖中文期刊/会议/学位论文。")
+st.caption("检索结果仅供参考，必须由你确认归属后才可用；建议先填写学校/单位以减少同名歧义，结果按年份倒序。")
 if "candidate_papers" not in st.session_state:
     st.session_state.candidate_papers = []
 if st.button("🔍 检索候选论文（万方）"):
@@ -445,7 +445,9 @@ if st.button("🔍 检索候选论文（万方）"):
     else:
         try:
             provider = WanfangProvider(settings.wanfang_app_key)
-            works = provider.search_publications(professor_name)
+            works = provider.search_publications(
+                professor_name, institution=institution.strip() or None
+            )
             st.session_state.candidate_papers = [_work_to_paper(work) for work in works]
             if not works:
                 st.info("未检索到候选论文，请检查姓名，或改为手动录入。")

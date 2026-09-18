@@ -55,12 +55,20 @@ class WanfangProvider:
         self.client = client or httpx.Client(timeout=timeout)
 
     def search_publications(
-        self, name: str, *, collections: list[str] | None = None, limit: int = 20
+        self,
+        name: str,
+        *,
+        institution: str | None = None,
+        collections: list[str] | None = None,
+        limit: int = 20,
     ) -> list[Work]:
         collections = collections or ["OpenPeriodical", "OpenConference"]
+        query = f"Creator:{name}"
+        if institution:
+            query = f"Creator:{name} AND OrganizationForSearch:{institution}"
         body = {
             "collections": collections,
-            "query": f"Creator:{name}",
+            "query": query,
             "returned_fields": [
                 "Title",
                 "Creator",
@@ -72,6 +80,7 @@ class WanfangProvider:
                 "PeriodicalTitle",
             ],
             "rows": limit,
+            "sort": {"sorts": [{"by": "PublishYear", "order": "DESC"}]},
         }
         resp = self.client.post(
             _BASE_URL,

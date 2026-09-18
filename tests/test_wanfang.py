@@ -62,3 +62,19 @@ def test_wanfang_search_parses_documents():
     assert work.source_url == "https://doi.org/10.11897/SP.J.1016.2017.01229"
     assert work.topics == ["卷积神经网络", "深度学习"]
     assert work.source_platform == "万方"
+
+
+def test_wanfang_search_adds_institution_and_sorts_by_year():
+    captured = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured["body"] = json.loads(request.content)
+        return httpx.Response(200, json={"documents": [], "numFound": "0"})
+
+    provider = WanfangProvider(
+        "test-key", client=httpx.Client(transport=httpx.MockTransport(handler))
+    )
+    provider.search_publications("陆伟", institution="武汉大学")
+    body = captured["body"]
+    assert body["query"] == "Creator:陆伟 AND OrganizationForSearch:武汉大学"
+    assert body["sort"] == {"sorts": [{"by": "PublishYear", "order": "DESC"}]}

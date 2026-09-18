@@ -196,6 +196,33 @@ def _load_run_view(repo, run_id):
     )
 
 
+def _compare_runs(repo) -> list[dict]:
+    """把历史已完成的 run 整理成对比行。"""
+    from advisor_fit.models.match import MatchReport
+    from advisor_fit.models.professor import ProfessorProfile
+
+    rows: list[dict] = []
+    for run in repo.list_runs():
+        if run["status"] != "COMPLETED":
+            continue
+        professor_data = repo.load_latest(run["id"], "professor_profile")
+        match_data = repo.load_latest(run["id"], "match")
+        if not (professor_data and match_data):
+            continue
+        professor = ProfessorProfile(**professor_data)
+        match = MatchReport(**match_data)
+        rows.append(
+            {
+                "导师": professor.name.value or professor.professor_id,
+                "研究匹配": match.research_fit.value,
+                "建议": match.recommendation.value,
+                "证据充分度": match.evidence_sufficiency,
+                "强项": "、".join(d.label for d in match.strengths) or "—",
+            }
+        )
+    return rows
+
+
 st.set_page_config(page_title="导师双选 AI 助手 v0.1", layout="wide")
 st.title("导师双选 AI 助手 v0.1")
 st.caption("人工核实资料输入 · 本地优先 · 不依赖 OpenAlex · 不自动发送邮件")
@@ -223,6 +250,9 @@ with st.sidebar:
             view = _load_run_view(st.session_state.repo, run["id"])
             if view is not None:
                 st.session_state.viewed_run = view
+    st.divider()
+    if st.button("📊 对比历史导师"):
+        st.session_state.show_compare = not st.session_state.get("show_compare", False)
 
 if st.session_state.get("viewed_run") is not None:
     st.header("📁 历史报告")
@@ -233,6 +263,15 @@ if st.session_state.get("viewed_run") is not None:
     if st.button("关闭历史报告"):
         st.session_state.pop("viewed_run", None)
         st.rerun()
+    st.divider()
+
+if st.session_state.get("show_compare"):
+    st.header("📊 历史导师对比")
+    rows = _compare_runs(st.session_state.repo)
+    if rows:
+        st.dataframe(rows, hide_index=True)
+    else:
+        st.info("暂无可对比的历史记录（先生成至少一次报告）。")
     st.divider()
 
 

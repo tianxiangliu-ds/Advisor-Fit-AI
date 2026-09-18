@@ -25,3 +25,25 @@ def test_app_defaults_to_manual_professor_and_paper_flow(tmp_path, monkeypatch):
     assert "导师姓名（必填）" in labels
     assert "学校/单位（必填）" in labels
     assert "抓取官方页并召回作者候选" not in buttons
+
+
+def test_fact_editor_renders_when_student_present(tmp_path, monkeypatch):
+    from advisor_fit.models.common import FactStatus
+    from advisor_fit.models.student import StudentFact, StudentProfile
+
+    monkeypatch.setattr(settings, "data_dir", tmp_path / "data")
+    monkeypatch.setattr(settings, "uploads_dir", tmp_path / "uploads")
+    app_path = Path(__file__).parent.parent / "app.py"
+
+    app = AppTest.from_file(str(app_path)).run(timeout=10)
+    student = StudentProfile(
+        student_id="s1",
+        facts=[StudentFact(id="f1", field="skill", value="Python", status=FactStatus.FACT)],
+    )
+    app.session_state["student"] = student
+    app.session_state["student_fact_editor"] = [
+        {"confirmed": False, "field": "skill", "value": "Python"}
+    ]
+    app.run()
+
+    assert not app.exception

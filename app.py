@@ -178,7 +178,7 @@ if student is None:
 else:
     st.caption("可以直接编辑、删除错误行，或在表格底部新增遗漏内容。")
     edited_rows = st.data_editor(
-        key="student_fact_editor",
+        st.session_state.student_fact_editor,
         num_rows="dynamic",
         hide_index=True,
         column_config={
@@ -191,6 +191,7 @@ else:
             "value": st.column_config.TextColumn("内容", width="large"),
         },
     )
+    st.session_state.student_fact_editor = edited_rows
     edited_student = apply_fact_edits(student, list(edited_rows))
     confirmed_fact_ids = edited_student.confirmed_fact_ids()
     if not confirmed_fact_ids:

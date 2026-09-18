@@ -150,6 +150,13 @@ def _render_report(result) -> None:
             )
         )
 
+    direction = getattr(result, "direction_summary", None)
+    if direction is not None and direction.summary:
+        st.subheader("研究方向归纳（LLM）")
+        st.write(direction.summary)
+        if direction.topics:
+            st.write("主题：" + "、".join(direction.topics))
+
     st.subheader("已核实论文")
     for publication in professor.recent_publications:
         label = f"{publication.title}（{publication.year or '年份未知'}）"
@@ -464,7 +471,7 @@ if st.session_state.candidate_papers:
         if cand.get("institution"):
             label += f" · {cand['institution']}"
         if cand.get("authors"):
-            label += f"〔{'、'.join(cand['authors'][:3])}〕"
+            label += f"〔{'、'.join(cand['authors'])}〕"
         cand["user_confirmed"] = st.checkbox(
             label, key=f"cand_paper_{index}", help=cand["source_url"]
         )

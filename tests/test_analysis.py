@@ -3,12 +3,14 @@
 from advisor_fit.llm.analysis import (
     AnalysisPoint,
     DeepAnalysis,
+    DirectionSummary,
     generate_deep_analysis,
+    generate_direction_summary,
     sanitize_analysis,
 )
 from advisor_fit.models.common import FactStatus
 from advisor_fit.models.evidence import Evidence
-from advisor_fit.models.professor import ProfessorProfile
+from advisor_fit.models.professor import ProfessorProfile, RecentPublication
 from advisor_fit.models.student import StudentFact, StudentProfile
 
 
@@ -64,3 +66,23 @@ def test_sanitize_analysis_drops_invalid_refs():
     point = cleaned.method_match[0]
     assert point.fact_ids == ["f1"]
     assert point.evidence_ids == ["ev1"]
+
+
+def test_generate_direction_summary_returns_output():
+    llm = FakeLLM(
+        DirectionSummary(summary="研究方向是知识图谱", topics=["知识图谱"], evidence_ids=["ev1"])
+    )
+    professor = ProfessorProfile(
+        professor_id="p1",
+        recent_publications=[RecentPublication(id="w1", title="T", source_ids=["ev1"])],
+    )
+    result = generate_direction_summary(llm, professor)
+    assert result.summary == "研究方向是知识图谱"
+    assert result.topics == ["知识图谱"]
+
+
+def test_generate_direction_summary_empty_without_publications():
+    result = generate_direction_summary(
+        FakeLLM(DirectionSummary()), ProfessorProfile(professor_id="p1")
+    )
+    assert result.summary == ""

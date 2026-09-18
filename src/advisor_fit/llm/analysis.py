@@ -90,3 +90,39 @@ def sanitize_analysis(
         recommended_papers=clean(analysis.recommended_papers),
         knowledge_to_supplement=clean(analysis.knowledge_to_supplement),
     )
+
+
+class DirectionSummary(BaseModel):
+    summary: str = ""
+    topics: list[str] = []
+    evidence_ids: list[str] = []
+
+
+_DIRECTION_INSTRUCTIONS = (
+    "根据导师近年论文的标题、摘要和关键词，归纳其研究方向。"
+    "summary 用 2-3 句中文概述研究方向；topics 列出 3-5 个具体研究主题；"
+    "evidence_ids 只引用 payload 中论文的 source_ids。不得编造。"
+)
+
+
+def generate_direction_summary(llm, professor: ProfessorProfile) -> DirectionSummary:
+    publications = [
+        {
+            "title": p.title,
+            "abstract": p.abstract,
+            "keywords": p.keywords,
+            "source_ids": p.source_ids,
+        }
+        for p in professor.recent_publications
+    ]
+    if not publications:
+        return DirectionSummary()
+    try:
+        output = llm.generate(
+            schema=DirectionSummary,
+            instructions=_DIRECTION_INSTRUCTIONS,
+            payload={"publications": publications},
+        )
+    except Exception:  # noqa: BLE001 - LLM 不可用时返回空
+        return DirectionSummary()
+    return output if isinstance(output, DirectionSummary) else DirectionSummary()

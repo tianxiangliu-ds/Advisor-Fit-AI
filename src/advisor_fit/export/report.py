@@ -85,3 +85,52 @@ def export_markdown(result: Any) -> str:
             lines.append(f"- {warning}")
 
     return "\n".join(lines)
+
+
+def export_docx(result: Any) -> bytes:
+    """导出 Word 文档（不含原始 CV 文本与 API Key）。"""
+    import io
+
+    from docx import Document
+
+    doc = Document()
+    doc.add_heading("导师研究报告", 0)
+
+    doc.add_heading("身份确认", level=1)
+    doc.add_paragraph(f"状态：{result.resolution.status.value}")
+
+    doc.add_heading("导师画像", level=1)
+    prof = result.professor
+    for field in prof.iter_asserted_fields():
+        doc.add_paragraph(f"{field.key}：{field.value}")
+    if prof.declared_interests:
+        doc.add_paragraph("官网声明方向：" + "、".join(t.topic for t in prof.declared_interests))
+    if prof.observed_recent_topics:
+        doc.add_paragraph(
+            "近年论文观察主题："
+            + "、".join(f"{t.topic}({t.trend})" for t in prof.observed_recent_topics)
+        )
+    doc.add_paragraph(f"招生状态：{prof.recruiting.status.value}")
+
+    doc.add_heading("匹配分析", level=1)
+    report = result.match_report
+    doc.add_paragraph(f"研究匹配：{report.research_fit.value}")
+    doc.add_paragraph(f"建议：{report.recommendation.value}")
+    if report.strengths:
+        doc.add_paragraph("强项：" + "、".join(d.label for d in report.strengths))
+    if report.gaps:
+        doc.add_paragraph("缺口：" + "、".join(report.gaps))
+
+    doc.add_heading("证据来源", level=1)
+    for ev in result.evidences:
+        doc.add_paragraph(f"[{ev.source_type}] {ev.title or ev.id}（{ev.source_url or ''}）")
+
+    doc.add_heading("邮件草稿", level=1)
+    if result.draft.subject:
+        doc.add_paragraph(f"主题：{result.draft.subject}")
+    for sentence in result.draft.sentences:
+        doc.add_paragraph(sentence.text)
+
+    buffer = io.BytesIO()
+    doc.save(buffer)
+    return buffer.getvalue()

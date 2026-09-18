@@ -12,7 +12,7 @@ import streamlit as st
 from pydantic import ValidationError
 
 from advisor_fit.config import settings
-from advisor_fit.export.report import export_json, export_markdown
+from advisor_fit.export.report import export_docx, export_json, export_markdown
 from advisor_fit.ingest.cv import (
     apply_fact_edits,
     build_student_profile,
@@ -392,6 +392,12 @@ if result is not None:
     _render_draft(result)
     st.download_button("下载 Markdown", export_markdown(result), file_name="advisor-report.md")
     st.download_button("下载 JSON", export_json(result), file_name="advisor-report.json")
+    st.download_button(
+        "下载 Word",
+        export_docx(result),
+        file_name="advisor-report.docx",
+        mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    )
     if st.button("删除本次数据", type="secondary"):
         _reset_run()
         st.rerun()

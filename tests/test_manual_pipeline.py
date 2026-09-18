@@ -110,6 +110,29 @@ def test_manual_pipeline_uses_title_and_abstract_when_keywords_missing(tmp_path)
     assert result.match_report.research_fit == "PARTIAL"
 
 
+def test_export_docx_contains_sections(tmp_path):
+    import io
+
+    from docx import Document
+
+    from advisor_fit.export.report import export_docx
+
+    repository = Repository(tmp_path / "app.db")
+    result = run_manual_pipeline(
+        student=_student(),
+        confirmed_fact_ids={"fact_python", "fact_kg"},
+        professor_input=_professor(),
+        llm=UnavailableLLM(),
+        repository=repository,
+    )
+    docx_bytes = export_docx(result)
+    assert docx_bytes.startswith(b"PK")  # ZIP 文件头
+    doc = Document(io.BytesIO(docx_bytes))
+    text = "\n".join(p.text for p in doc.paragraphs)
+    assert "导师研究报告" in text
+    assert "王老师" in text
+
+
 def test_manual_pipeline_ignores_unconfirmed_student_facts(tmp_path):
     repository = Repository(tmp_path / "app.db")
 

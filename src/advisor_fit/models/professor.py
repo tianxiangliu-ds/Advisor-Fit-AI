@@ -43,6 +43,7 @@ class OfficialIdentityAnchor(BaseModel):
     official_dois: set[str] = set()
     official_paper_titles: list[str] = []
     declared_interests: list[str] = []
+    official_collaborators: list[str] = []
 
 
 class AuthorCandidate(BaseModel):
@@ -56,6 +57,7 @@ class AuthorCandidate(BaseModel):
     dois: set[str] = set()
     topics: list[str] = []
     last_known_institution: str | None = None
+    collaborators: list[str] = []
 
 
 class FactValue(BaseModel):

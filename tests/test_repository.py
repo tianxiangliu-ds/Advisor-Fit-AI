@@ -1,0 +1,96 @@
+"""Task 2：SQLite 证据账本与运行生命周期测试。"""
+
+import uuid
+
+import pytest
+
+from advisor_fit.models.common import SourceRecord
+from advisor_fit.models.evidence import Claim, ClaimStatus, Evidence
+from advisor_fit.storage.repository import Repository
+
+
+def source_record() -> SourceRecord:
+    return SourceRecord(
+        id="src_1",
+        source_type="official_page",
+        url="https://u.edu/faculty/wang",
+        title="王伟 - 计算机学院",
+    )
+
+
+def evidence_record() -> Evidence:
+    return Evidence(
+        id="ev_1",
+        source_type="openalex",
+        source_url="https://api.openalex.org/works/W123",
+        title="Retrieval-Augmented Generation",
+        published_date="2026-03-01",
+        evidence_text="...",
+    )
+
+
+def supported_claim() -> Claim:
+    return Claim(
+        id="c1",
+        text="近三年持续研究检索增强生成",
+        claim_type="trend",
+        status=ClaimStatus.SUPPORTED,
+        evidence_ids=["ev_1"],
+    )
+
+
+def test_delete_run_removes_sources_evidence_and_claims(tmp_path):
+    repo = Repository(tmp_path / "test.db")
+    run_id = repo.create_run()
+    repo.save_source(run_id, source_record())
+    repo.save_evidence(run_id, evidence_record())
+    repo.save_claim(run_id, supported_claim())
+
+    assert repo.count_rows_for_run(run_id) == 3
+    repo.delete_run(run_id)
+
+    assert repo.load_run(run_id) is None
+    assert repo.count_rows_for_run(run_id) == 0
+
+
+def test_create_run_returns_uuid_and_status(tmp_path):
+    repo = Repository(tmp_path / "test.db")
+    run_id = repo.create_run()
+    uuid.UUID(run_id)  # 不抛异常即合法 UUID
+    run = repo.load_run(run_id)
+    assert run["status"] == "STARTED"
+
+
+def test_load_artifacts_by_kind(tmp_path):
+    repo = Repository(tmp_path / "test.db")
+    run_id = repo.create_run()
+    repo.save_source(run_id, source_record())
+    repo.save_evidence(run_id, evidence_record())
+
+    sources = repo.load_artifacts(run_id, "source")
+    assert len(sources) == 1
+    assert sources[0]["id"] == "src_1"
+
+
+def test_save_artifact_replaces_same_id(tmp_path):
+    repo = Repository(tmp_path / "test.db")
+    run_id = repo.create_run()
+    repo.save_source(run_id, source_record())
+    updated = source_record()
+    updated.title = "更新后的标题"
+    repo.save_source(run_id, updated)
+
+    sources = repo.load_artifacts(run_id, "source")
+    assert len(sources) == 1
+    assert sources[0]["title"] == "更新后的标题"
+
+
+def test_delete_run_rejects_path_like_id(tmp_path):
+    repo = Repository(tmp_path / "test.db")
+    with pytest.raises(ValueError):
+        repo.delete_run("../etc/passwd")
+
+
+def test_delete_missing_run_is_noop(tmp_path):
+    repo = Repository(tmp_path / "test.db")
+    repo.delete_run(str(uuid.uuid4()))  # 合法 UUID 但不存在，不应抛错

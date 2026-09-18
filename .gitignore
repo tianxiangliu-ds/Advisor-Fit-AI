@@ -19,6 +19,7 @@ __pycache__/
 .venv/
 venv/
 .pytest_cache/
+.pytest_basetemp/
 .ruff_cache/
 .mypy_cache/
 

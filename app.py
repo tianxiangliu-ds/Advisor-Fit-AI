@@ -15,21 +15,30 @@ from advisor_fit.ingest.cv import (
     apply_fact_edits,
     build_student_profile,
     delete_uploaded_cv,
+    extract_pdf_markdown,
     extract_pdf_text,
 )
+from advisor_fit.ingest.cv_llm import build_student_profile_llm
 from advisor_fit.ingest.manual_professor import ManualPaperInput, ManualProfessorInput
-from advisor_fit.llm.provider import OpenAIStructuredLLM
+from advisor_fit.llm.provider import NullLLM, build_llm
 from advisor_fit.manual_pipeline import run_manual_pipeline
 from advisor_fit.storage.repository import Repository
 
 
-class _NullLLM:
-    def generate(self, **_kwargs):
-        raise RuntimeError("未配置 LLM")
-
-
 def _llm():
-    return OpenAIStructuredLLM() if settings.llm_api_key else _NullLLM()
+    return build_llm()
+
+
+def _build_student_profile(upload_path, parsed):
+    """LLM 结构化抽取优先；未配置或失败时降级为规则抽取。"""
+    llm = _llm()
+    if isinstance(llm, NullLLM):
+        return build_student_profile(parsed)
+    text = extract_pdf_markdown(upload_path) or parsed.text
+    try:
+        return build_student_profile_llm(text, llm)
+    except Exception:  # noqa: BLE001 - LLM 失败必须降级到规则路径
+        return build_student_profile(parsed)
 
 
 def _new_run() -> None:
@@ -144,7 +153,7 @@ if st.button("解析 CV", type="primary", disabled=uploaded is None):
     upload_path.parent.mkdir(parents=True, exist_ok=True)
     upload_path.write_bytes(uploaded.getvalue())
     parsed = extract_pdf_text(upload_path)
-    student = build_student_profile(parsed)
+    student = _build_student_profile(upload_path, parsed)
     st.session_state.student = student
     st.session_state.fact_rows = _fact_rows(student)
     st.session_state.parsed_text = parsed.text

@@ -10,13 +10,11 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
+    llm_provider: str = "deepseek"  # deepseek | openai | anthropic | ollama
     llm_api_key: str = ""
-    llm_base_url: str = "https://api.openai.com/v1"
-    llm_model: str = ""
+    llm_base_url: str = ""  # 留空则用 provider 默认地址
+    llm_model: str = ""      # 留空则用 provider 默认模型
     llm_store: bool = False
-
-    openalex_mailto: str = ""
-    advisor_fit_user_agent: str = "AdvisorFitBot/0.1 (contact: you@example.com)"
 
     data_dir: Path = Path("data")
     uploads_dir: Path = Path("uploads")

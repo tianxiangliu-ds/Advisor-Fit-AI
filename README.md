@@ -41,7 +41,9 @@ uv run streamlit run app.py
 
 默认地址通常为 `http://localhost:8501`。
 
-LLM 配置是可选的。复制 `.env.example` 为 `.env` 并填写 `LLM_API_KEY`、`LLM_MODEL` 后可启用结构化生成；未配置时使用事实锁定模板，核心流程仍可完整运行。
+LLM 配置是可选的，支持多供应商：复制 `.env.example` 为 `.env`，设置 `LLM_PROVIDER`（`deepseek` 默认 / `openai` / `anthropic` / `ollama`）与 `LLM_API_KEY`。配置后，简历结构化抽取与邮件/声明生成走 LLM；未配置时自动降级为「规则抽取 + 事实锁定模板」，核心流程仍可完整运行。`LLM_BASE_URL`、`LLM_MODEL` 留空则使用所选供应商的默认地址与模型。
+
+简历解析：默认用 `pypdf` 提取文本；若额外安装了 `docling`（可选增强），会自动用它把 PDF 转成 Markdown，对复杂版式/表格/中文简历效果更好，失败时仍回退到 `pypdf`。
 
 ## 第一次测试建议
 
@@ -83,5 +85,7 @@ LLM 配置是可选的。复制 `.env.example` 为 `.env` 并填写 `LLM_API_KEY
 git show v0       # 查看原始 MVP 基线
 git diff v0..HEAD # 查看从 v0 到当前版本的变化（提交 v0.1 后）
 ```
+
+> v0.1 工作区已移除自动抓取子系统（官网抓取、OpenAlex、作者消歧及其测试与依赖）。如需参照旧实现，请回看 Git 标签 `v0`。
 
 完整立项与早期技术分析保留在 `outputs/`。其中部分内容描述原始自动抓取方案，应以本 README 的 v0.1 边界为准。

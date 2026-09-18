@@ -76,6 +76,23 @@ def extract_pdf_text(path: Path | str) -> ParsedDocument:
     return ParsedDocument(text=text, page_count=len(reader.pages), warnings=warnings)
 
 
+def extract_pdf_markdown(path: Path | str) -> str:
+    """用 docling 将 PDF 转为 Markdown；docling 不可用时降级为 pypdf 纯文本。"""
+    path = Path(path)
+    try:
+        from docling.document_converter import DocumentConverter
+    except Exception:  # noqa: BLE001 - docling 为可选增强，缺失时走 pypdf
+        return extract_pdf_text(path).text
+    try:
+        result = DocumentConverter().convert(str(path))
+        markdown = result.document.export_to_markdown()
+        if markdown and markdown.strip():
+            return markdown.strip()
+    except Exception:  # noqa: BLE001 - docling 解析失败时降级
+        pass
+    return extract_pdf_text(path).text
+
+
 def redact_pii(text: str, name: str | None = None) -> RedactedText:
     redactions: set[str] = set()
     out = text

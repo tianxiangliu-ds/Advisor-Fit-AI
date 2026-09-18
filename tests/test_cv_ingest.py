@@ -12,6 +12,7 @@ from advisor_fit.ingest.cv import (
     apply_fact_edits,
     build_student_profile,
     delete_uploaded_cv,
+    extract_pdf_markdown,
     extract_pdf_text,
     redact_pii,
 )
@@ -104,3 +105,8 @@ def test_delete_uploaded_cv_removes_only_exact_run_file(tmp_path):
 def test_delete_uploaded_cv_rejects_path_like_run_id(tmp_path):
     with pytest.raises(ValueError, match="valid UUID"):
         delete_uploaded_cv(tmp_path, "../keep")
+
+
+def test_extract_pdf_markdown_falls_back_to_pypdf(make_cv_pdf):
+    path = make_cv_pdf("Python machine learning")
+    assert "Python" in extract_pdf_markdown(path)

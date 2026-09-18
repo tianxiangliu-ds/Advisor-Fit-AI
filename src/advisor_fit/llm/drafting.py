@@ -42,10 +42,63 @@ def generate_draft(
         output = llm.generate(
             schema=DraftOutput, instructions=_DRAFT_INSTRUCTIONS, payload=payload
         )
-    except Exception:  # noqa: BLE001 - LLM 不可用时返回空草稿，交由上层降级
-        return Draft(subject="", sentences=[], warnings=["LLM 不可用，未生成邮件草稿"])
+    except Exception:  # noqa: BLE001 - LLM 不可用时使用确定性、可校验模板
+        return generate_template_draft(student, professor)
 
     if not isinstance(output, DraftOutput):
         return Draft(subject="", sentences=[], warnings=["LLM 输出格式错误"])
 
     return Draft(subject=output.subject, sentences=output.sentences, warnings=[])
+
+
+def generate_template_draft(
+    student: StudentProfile, professor: ProfessorProfile
+) -> Draft:
+    """无 LLM 时的事实锁定模板；所有事实句都绑定来源 ID。"""
+    name = professor.name.value or professor.professor_id or "老师"
+    sentences = [
+        DraftSentence(text=f"尊敬的{name}老师，您好！", sentence_type="GENERIC")
+    ]
+
+    facts = student.draftable_facts()
+    if facts:
+        fact = facts[0]
+        sentences.append(
+            DraftSentence(
+                text=f"我的相关经历包括{fact.value}，希望进一步了解与之相关的研究机会。",
+                sentence_type="STUDENT_FACT",
+                fact_ids=[fact.id],
+            )
+        )
+
+    topics = [*professor.observed_recent_topics, *professor.declared_interests]
+    if topics:
+        topic = topics[0]
+        sentences.append(
+            DraftSentence(
+                text=f"了解到您的公开研究涉及{topic.topic}，我希望进一步了解该方向。",
+                sentence_type="PROFESSOR_FACT",
+                evidence_ids=topic.evidence_ids,
+            )
+        )
+    elif professor.recent_publications:
+        publication = professor.recent_publications[0]
+        sentences.append(
+            DraftSentence(
+                text=f"了解到您的公开研究成果包括《{publication.title}》，我希望进一步了解相关方向。",
+                sentence_type="PROFESSOR_FACT",
+                evidence_ids=publication.source_ids,
+            )
+        )
+
+    sentences.append(
+        DraftSentence(
+            text="想请教您近期是否有相关研究或招生安排，感谢您的时间。",
+            sentence_type="GENERIC",
+        )
+    )
+    return Draft(
+        subject="咨询研究与招生机会",
+        sentences=sentences,
+        warnings=["未配置 LLM，已使用事实锁定模板"],
+    )

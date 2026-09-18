@@ -4,9 +4,11 @@ from __future__ import annotations
 
 import pytest
 
+from advisor_fit.llm.drafting import generate_draft
 from advisor_fit.models.common import FactStatus
 from advisor_fit.models.evidence import Evidence
-from advisor_fit.models.match import Draft, DraftSentence, SentenceType
+from advisor_fit.models.match import Draft, DraftSentence, MatchReport, SentenceType
+from advisor_fit.models.professor import ObservedTopic, ProfessorProfile
 from advisor_fit.models.student import StudentFact, StudentProfile
 from advisor_fit.validation.draft import validate_draft
 
@@ -89,3 +91,26 @@ def test_professor_fact_without_evidence_is_rejected():
     )
     result = validate_draft(draft, _confirmed_student(), _evidence_map())
     assert not result.ok
+
+
+def test_unavailable_llm_falls_back_to_grounded_template():
+    class UnavailableLLM:
+        def generate(self, **_kwargs):
+            raise RuntimeError("not configured")
+
+    professor = ProfessorProfile(
+        professor_id="王老师",
+        identity_confirmed=True,
+        observed_recent_topics=[
+            ObservedTopic(topic="检索增强生成", evidence_ids=["ev1"])
+        ],
+    )
+
+    draft = generate_draft(
+        UnavailableLLM(), _confirmed_student(), professor, MatchReport()
+    )
+    result = validate_draft(draft, _confirmed_student(), _evidence_map())
+
+    assert draft.subject
+    assert draft.sentences
+    assert result.ok

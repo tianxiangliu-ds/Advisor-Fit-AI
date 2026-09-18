@@ -23,7 +23,7 @@ from advisor_fit.providers.academic import Work
 
 def _official_evidence_id(evidences: list[Evidence]) -> str:
     for evidence in evidences:
-        if evidence.source_type == "official_page":
+        if evidence.source_type in {"official_page", "user_confirmed_profile"}:
             return evidence.id
     return "ev_official_profile"
 
@@ -83,6 +83,9 @@ def assemble_professor_profile(
                 doi=work.doi,
                 author_resolution_status="CONFIRMED",
                 source_ids=[f"ev_{work.id}"],
+                abstract=work.abstract,
+                source_url=work.source_url,
+                keywords=work.topics,
             )
         )
 

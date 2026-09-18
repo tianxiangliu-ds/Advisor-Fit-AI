@@ -1,0 +1,106 @@
+"""人工证据输入版 pipeline：不访问导师官网，也不调用学术检索 API。"""
+
+from __future__ import annotations
+
+from advisor_fit.analysis.matching import build_match_report
+from advisor_fit.analysis.professor_profile import assemble_professor_profile
+from advisor_fit.ingest.manual_professor import ManualProfessorInput, build_manual_materials
+from advisor_fit.llm.claims import generate_and_validate_claims
+from advisor_fit.llm.drafting import generate_draft
+from advisor_fit.models.match import Draft
+from advisor_fit.models.student import StudentProfile
+from advisor_fit.pipeline import PipelineResult
+from advisor_fit.resolution.author import ResolutionResult
+from advisor_fit.storage.repository import Repository
+from advisor_fit.validation.claims import validate_claims
+from advisor_fit.validation.draft import DraftValidationResult, validate_draft
+
+
+def _confirmed_student(
+    student: StudentProfile, confirmed_fact_ids: set[str], *, student_id: str
+) -> StudentProfile:
+    facts = [
+        fact.model_copy(update={"user_confirmed": fact.id in confirmed_fact_ids})
+        for fact in student.facts
+    ]
+    return student.model_copy(update={"student_id": student_id, "facts": facts, "name": None})
+
+
+def _sanitize_draft(draft: Draft, validation: DraftValidationResult) -> Draft:
+    invalid = {
+        error.sentence_index
+        for error in validation.errors
+        if error.sentence_index is not None
+    }
+    return Draft(
+        subject=draft.subject,
+        sentences=[
+            sentence
+            for index, sentence in enumerate(draft.sentences)
+            if index not in invalid
+        ],
+        warnings=[*draft.warnings, f"移除 {len(invalid)} 句无来源句子"],
+    )
+
+
+def run_manual_pipeline(
+    *,
+    student: StudentProfile,
+    confirmed_fact_ids: set[str],
+    professor_input: ManualProfessorInput,
+    llm,
+    repository: Repository,
+    run_id: str | None = None,
+) -> PipelineResult:
+    run_id = run_id or repository.create_run()
+    prefix = run_id.replace("-", "")[:10]
+    student = _confirmed_student(
+        student, confirmed_fact_ids, student_id=f"student_{prefix}"
+    )
+    materials = build_manual_materials(professor_input, id_prefix=prefix)
+
+    professor = assemble_professor_profile(
+        materials.anchor, materials.works, materials.evidences
+    ).model_copy(update={"professor_id": f"professor_{prefix}"})
+    match_report = build_match_report(student, professor)
+    evidence_map = {evidence.id: evidence for evidence in materials.evidences}
+
+    claims = generate_and_validate_claims(llm, {"evidences": evidence_map})
+    claim_validation = validate_claims(claims, evidence_map)
+    draft = generate_draft(llm, student, professor, match_report)
+    draft_validation = validate_draft(draft, student, evidence_map)
+    if not draft_validation.ok:
+        draft = _sanitize_draft(draft, draft_validation)
+        draft_validation = validate_draft(draft, student, evidence_map)
+
+    for source in materials.sources:
+        repository.save_source(run_id, source)
+    for evidence in materials.evidences:
+        repository.save_evidence(run_id, evidence)
+    repository.save_student_profile(run_id, student)
+    repository.save_professor_profile(run_id, professor)
+    repository.save_match(run_id, match_report)
+    repository.save_draft(run_id, draft)
+    for claim in claims:
+        repository.save_claim(run_id, claim)
+    repository.set_run_status(run_id, "COMPLETED")
+
+    return PipelineResult(
+        run_id=run_id,
+        student=student,
+        professor=professor,
+        match_report=match_report,
+        resolution=ResolutionResult(
+            status="CONFIRMED",
+            selected_author_id=professor.professor_id,
+            reasons=["user_confirmed_profile", "user_confirmed_papers"],
+            confirmed_by="user",
+        ),
+        claims=claims,
+        claim_validation=claim_validation,
+        draft=draft,
+        draft_validation=draft_validation,
+        evidences=materials.evidences,
+        sources=materials.sources,
+        warnings=[],
+    )

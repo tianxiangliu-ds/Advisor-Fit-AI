@@ -10,7 +10,9 @@
 from __future__ import annotations
 
 import re
+import uuid
 from pathlib import Path
+from typing import Any
 
 from pydantic import BaseModel
 from pypdf import PdfReader
@@ -201,3 +203,40 @@ def build_student_profile(document: ParsedDocument) -> StudentProfile:
                 i += 1
 
     return StudentProfile(student_id="student_1", facts=facts)
+
+
+def apply_fact_edits(
+    profile: StudentProfile, rows: list[dict[str, Any]]
+) -> StudentProfile:
+    """把 UI 编辑后的行转换为新的事实清单；空行等同于删除。"""
+    facts: list[StudentFact] = []
+    for index, row in enumerate(rows):
+        field = str(row.get("field") or "").strip()
+        value = str(row.get("value") or "").strip()
+        if not field or not value:
+            continue
+        facts.append(
+            StudentFact(
+                id=f"fact_edit_{index}",
+                field=field,
+                value=value,
+                status=FactStatus.FACT,
+                source_id="cv_or_user_edit",
+                user_confirmed=bool(row.get("confirmed", False)),
+            )
+        )
+    return profile.model_copy(update={"facts": facts})
+
+
+def delete_uploaded_cv(upload_dir: Path | str, run_id: str) -> bool:
+    """仅删除与精确 UUID run_id 对应的上传 PDF。"""
+    try:
+        uuid.UUID(run_id)
+    except (ValueError, AttributeError, TypeError) as exc:
+        raise ValueError("run_id must be a valid UUID") from exc
+
+    path = Path(upload_dir) / f"{run_id}.pdf"
+    if not path.exists():
+        return False
+    path.unlink()
+    return True

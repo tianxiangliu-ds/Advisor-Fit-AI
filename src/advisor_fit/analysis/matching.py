@@ -47,6 +47,19 @@ def _professor_topics(professor: ProfessorProfile) -> list[tuple[str, list[str]]
     return topics
 
 
+def _professor_search_materials(
+    professor: ProfessorProfile,
+) -> list[tuple[str, list[str]]]:
+    materials = _professor_topics(professor)
+    for publication in professor.recent_publications:
+        for keyword in publication.keywords:
+            materials.append((keyword, publication.source_ids))
+        for text in (publication.title, publication.abstract):
+            if text:
+                materials.append((text, publication.source_ids))
+    return materials
+
+
 def _match_terms(
     terms: list[tuple[str, str]], topics: list[tuple[str, list[str]]]
 ) -> list[tuple[str, str, str, list[str]]]:
@@ -82,8 +95,9 @@ def build_match_report(student: StudentProfile, professor: ProfessorProfile) -> 
     skills = [(f.id, str(f.value)) for f in draftable if f.field == "skill"]
     interests = [(f.id, str(f.value)) for f in draftable if f.field == "interest"]
 
-    skill_matches = _match_terms(skills, topics)
-    interest_matches = _match_terms(interests, topics)
+    search_materials = _professor_search_materials(professor)
+    skill_matches = _match_terms(skills, search_materials)
+    interest_matches = _match_terms(interests, search_materials)
 
     if skill_matches:
         topic_level = FitLevel.STRONG

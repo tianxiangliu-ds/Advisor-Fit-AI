@@ -1,0 +1,27 @@
+"""v0.1 Streamlit 主流程的最小页面契约。"""
+
+from __future__ import annotations
+
+from pathlib import Path
+
+from streamlit.testing.v1 import AppTest
+
+from advisor_fit.config import settings
+
+
+def test_app_defaults_to_manual_professor_and_paper_flow(tmp_path, monkeypatch):
+    monkeypatch.setattr(settings, "data_dir", tmp_path / "data")
+    monkeypatch.setattr(settings, "uploads_dir", tmp_path / "uploads")
+    app_path = Path(__file__).parent.parent / "app.py"
+
+    app = AppTest.from_file(str(app_path)).run(timeout=10)
+
+    assert not app.exception
+    headers = [item.value for item in app.header]
+    labels = [item.label for item in app.text_input]
+    buttons = [item.label for item in app.button]
+    assert "① 上传并确认简历" in headers
+    assert "③ 导师资料与已核实论文" in headers
+    assert "导师姓名（必填）" in labels
+    assert "学校/单位（必填）" in labels
+    assert "抓取官方页并召回作者候选" not in buttons

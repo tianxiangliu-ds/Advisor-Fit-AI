@@ -9,7 +9,9 @@ from pypdf import PdfWriter
 
 from advisor_fit.ingest.cv import (
     ParsedDocument,
+    apply_fact_edits,
     build_student_profile,
+    delete_uploaded_cv,
     extract_pdf_text,
     redact_pii,
 )
@@ -66,3 +68,39 @@ def test_profile_extracts_skills_and_degree(parsed_fixture):
     assert "Python" in values
     assert "本科" in values
     assert "某大学" in values
+
+
+def test_apply_fact_edits_supports_edit_add_delete_and_confirmation(parsed_fixture):
+    profile = build_student_profile(parsed_fixture)
+    edited = apply_fact_edits(
+        profile,
+        [
+            {"field": "skill", "value": "Python", "confirmed": True},
+            {"field": "project", "value": "知识图谱课程项目", "confirmed": True},
+            {"field": "skill", "value": "", "confirmed": True},
+        ],
+    )
+
+    assert [(fact.field, fact.value) for fact in edited.facts] == [
+        ("skill", "Python"),
+        ("project", "知识图谱课程项目"),
+    ]
+    assert all(fact.user_confirmed for fact in edited.facts)
+    assert edited.facts[0].id != edited.facts[1].id
+
+
+def test_delete_uploaded_cv_removes_only_exact_run_file(tmp_path):
+    run_id = "12345678-1234-5678-1234-567812345678"
+    upload = tmp_path / f"{run_id}.pdf"
+    upload.write_bytes(b"pdf")
+    other = tmp_path / "keep.pdf"
+    other.write_bytes(b"keep")
+
+    assert delete_uploaded_cv(tmp_path, run_id)
+    assert not upload.exists()
+    assert other.exists()
+
+
+def test_delete_uploaded_cv_rejects_path_like_run_id(tmp_path):
+    with pytest.raises(ValueError, match="valid UUID"):
+        delete_uploaded_cv(tmp_path, "../keep")

@@ -24,6 +24,9 @@ class Work(BaseModel):
     venue: str | None = None
     topics: list[str] = []
     citation_count: int | None = None
+    abstract: str = ""
+    source_url: str | None = None
+    source_platform: str | None = None
 
 
 class AcademicProviderUnavailable(Exception):

@@ -91,6 +91,9 @@ class RecentPublication(BaseModel):
     doi: str | None = None
     author_resolution_status: str = "CONFIRMED"
     source_ids: list[str] = []
+    abstract: str = ""
+    source_url: str | None = None
+    keywords: list[str] = []
 
 
 class Recruiting(BaseModel):

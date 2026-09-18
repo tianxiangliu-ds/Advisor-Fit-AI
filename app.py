@@ -379,6 +379,7 @@ with right:
     professor_email = st.text_input("导师邮箱（可选）")
     declared_interests_text = st.text_area("官网公开研究方向（可选，用逗号或分号分隔）")
 identity_confirmed = st.checkbox("我已核对并确认以上信息属于目标导师")
+paper_read_confirmed = st.checkbox("我已阅读以上论文（可选，允许邮件提及）")
 
 paper_count = int(st.number_input("录入论文数量", min_value=1, max_value=10, value=1))
 paper_values: list[dict] = []
@@ -484,6 +485,7 @@ if st.button("生成报告与邮件草稿", type="primary", disabled=not can_gen
                 llm=_llm(),
                 repository=st.session_state.repo,
                 run_id=st.session_state.run_id,
+                paper_read_confirmed=paper_read_confirmed,
             )
     except (ValidationError, ValueError) as exc:
         st.error(f"请检查输入：{exc}")

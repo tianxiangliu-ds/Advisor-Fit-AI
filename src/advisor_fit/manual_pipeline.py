@@ -72,6 +72,7 @@ def run_manual_pipeline(
     llm,
     repository: Repository,
     run_id: str | None = None,
+    paper_read_confirmed: bool = False,
 ) -> PipelineResult:
     run_id = run_id or repository.create_run()
     prefix = run_id.replace("-", "")[:10]
@@ -91,11 +92,13 @@ def run_manual_pipeline(
 
     claims = generate_and_validate_claims(llm, {"evidences": evidence_map})
     claim_validation = validate_claims(claims, evidence_map)
-    draft = generate_draft(llm, student, professor, match_report)
-    draft_validation = validate_draft(draft, student, evidence_map)
+    draft = generate_draft(
+        llm, student, professor, match_report, paper_read_confirmed=paper_read_confirmed
+    )
+    draft_validation = validate_draft(draft, student, evidence_map, paper_read_confirmed)
     if not draft_validation.ok:
         draft = _sanitize_draft(draft, draft_validation)
-        draft_validation = validate_draft(draft, student, evidence_map)
+        draft_validation = validate_draft(draft, student, evidence_map, paper_read_confirmed)
 
     for source in materials.sources:
         repository.save_source(run_id, source)

@@ -25,7 +25,11 @@ class DraftOutput(BaseModel):
 
 
 def generate_draft(
-    llm, student: StudentProfile, professor: ProfessorProfile, match_report
+    llm,
+    student: StudentProfile,
+    professor: ProfessorProfile,
+    match_report,
+    paper_read_confirmed: bool = False,
 ) -> Draft:
     payload = {
         "student_facts": [
@@ -43,7 +47,9 @@ def generate_draft(
             schema=DraftOutput, instructions=_DRAFT_INSTRUCTIONS, payload=payload
         )
     except Exception:  # noqa: BLE001 - LLM 不可用时使用确定性、可校验模板
-        return generate_template_draft(student, professor)
+        return generate_template_draft(
+            student, professor, paper_read_confirmed=paper_read_confirmed
+        )
 
     if not isinstance(output, DraftOutput):
         return Draft(subject="", sentences=[], warnings=["LLM 输出格式错误"])
@@ -52,7 +58,7 @@ def generate_draft(
 
 
 def generate_template_draft(
-    student: StudentProfile, professor: ProfessorProfile
+    student: StudentProfile, professor: ProfessorProfile, paper_read_confirmed: bool = False
 ) -> Draft:
     """无 LLM 时的事实锁定模板；所有事实句都绑定来源 ID。"""
     professor_label = professor.name.value or professor.professor_id or "老师"
@@ -103,6 +109,14 @@ def generate_template_draft(
                 text=f"您近年发表了{'、'.join(f'《{p.title}》' for p in publications)}等成果。",
                 sentence_type="PROFESSOR_FACT",
                 evidence_ids=[ev for p in publications for ev in p.source_ids],
+            )
+        )
+    if paper_read_confirmed and publications:
+        sentences.append(
+            DraftSentence(
+                text=f"我已阅读您发表的《{publications[0].title}》。",
+                sentence_type="PROFESSOR_FACT",
+                evidence_ids=publications[0].source_ids,
             )
         )
 

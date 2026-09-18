@@ -70,3 +70,11 @@ def test_template_cites_professor_evidence_ids():
     all_evidence = [ev for s in professor_sentences for ev in s.evidence_ids]
     assert "ev1" in all_evidence
     assert "ev2" in all_evidence
+
+
+def test_template_mentions_reading_only_when_confirmed():
+    draft = generate_template_draft(_student(), _professor(), paper_read_confirmed=False)
+    assert "已阅读" not in "".join(s.text for s in draft.sentences)
+
+    draft2 = generate_template_draft(_student(), _professor(), paper_read_confirmed=True)
+    assert "已阅读" in "".join(s.text for s in draft2.sentences)

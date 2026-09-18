@@ -113,6 +113,27 @@ def _work_to_paper(work) -> dict:
     }
 
 
+def _search_via_agent(llm, name: str, institution: str | None) -> list[dict]:
+    """用 Harness 循环让 Agent 决策检索；无 LLM 时直接检索。"""
+    from advisor_fit.harness.loop import run_loop
+
+    provider = WanfangProvider(settings.wanfang_app_key)
+
+    def search_papers(name: str, institution: str | None = None) -> dict:
+        works = provider.search_publications(name, institution=institution)
+        return {"papers": [_work_to_paper(work) for work in works]}
+
+    if isinstance(llm, NullLLM):
+        return search_papers(name, institution).get("papers", [])
+
+    tools = [("search_papers", "按姓名和学校检索候选论文", search_papers)]
+    steps = run_loop(llm, tools, f"检索导师 {name} 的论文")
+    for step in steps:
+        if step.get("tool") == "search_papers" and isinstance(step.get("result"), dict):
+            return step["result"].get("papers", [])
+    return []
+
+
 _FIT_BADGES = {
     "STRONG": "🟢 强",
     "PARTIAL": "🟡 部分",
@@ -446,19 +467,16 @@ st.markdown("**或从万方检索候选论文（可选，需联网 + 万方 appk
 st.caption("检索结果仅供参考，必须由你确认归属后才可用；建议先填写学校/单位以减少同名歧义，结果按年份倒序。")
 if "candidate_papers" not in st.session_state:
     st.session_state.candidate_papers = []
-if st.button("🔍 检索候选论文（万方）"):
+if st.button("🔎 一键研究（Agent）"):
     if not settings.wanfang_app_key:
         st.error("请先在 .env 里配置 WANFANG_APP_KEY（万方数据开放平台申请）")
     elif not professor_name.strip():
         st.error("请先填写导师姓名")
     else:
         try:
-            provider = WanfangProvider(settings.wanfang_app_key)
-            works = provider.search_publications(
-                professor_name, institution=institution.strip() or None
-            )
-            st.session_state.candidate_papers = [_work_to_paper(work) for work in works]
-            if not works:
+            papers = _search_via_agent(_llm(), professor_name, institution.strip() or None)
+            st.session_state.candidate_papers = papers
+            if not papers:
                 st.info("未检索到候选论文，请检查姓名，或改为手动录入。")
         except Exception as exc:  # noqa: BLE001 - 检索失败必须降级到手动录入
             st.error(f"检索失败（不影响手动录入）：{exc}")

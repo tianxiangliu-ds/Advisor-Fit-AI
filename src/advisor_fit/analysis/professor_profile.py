@@ -45,6 +45,7 @@ def assemble_professor_profile(
 
     profile = ProfessorProfile(
         professor_id=anchor.name or "professor",
+        identity_confirmed=True,
         name=_fact(anchor.name, official_ev),
         institution=_fact(anchor.institution, official_ev),
         department=_fact(anchor.department, official_ev),

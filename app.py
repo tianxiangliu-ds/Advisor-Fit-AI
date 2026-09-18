@@ -28,6 +28,7 @@ from advisor_fit.ingest.manual_professor import (
 )
 from advisor_fit.llm.provider import NullLLM, build_llm
 from advisor_fit.manual_pipeline import run_manual_pipeline
+from advisor_fit.providers.openalex import OpenAlexProvider, search_candidate_works
 from advisor_fit.storage.repository import Repository
 
 
@@ -88,6 +89,18 @@ def _remove_fact(row_id: str) -> None:
 def _split_terms(value: str) -> list[str]:
     normalized = value.replace("，", ",").replace("；", ",").replace(";", ",")
     return [item.strip() for item in normalized.split(",") if item.strip()]
+
+
+def _work_to_paper(work) -> dict:
+    return {
+        "title": work.title,
+        "year": work.year,
+        "abstract": work.abstract or "（OpenAlex 未提供摘要）",
+        "source_url": work.source_url or "",
+        "source_platform": work.source_platform or "OpenAlex",
+        "keywords": work.topics or [],
+        "user_confirmed": False,
+    }
 
 
 def _render_report(result) -> None:
@@ -281,6 +294,36 @@ for index in range(paper_count):
                 "user_confirmed": paper_confirmed,
             }
         )
+
+st.markdown("**或从 OpenAlex 检索候选论文（可选，需联网）**")
+st.caption("检索结果仅供参考，必须由你确认归属后才可用。")
+if "candidate_papers" not in st.session_state:
+    st.session_state.candidate_papers = []
+if st.button("🔍 检索候选论文"):
+    if not professor_name.strip():
+        st.error("请先填写导师姓名")
+    else:
+        try:
+            provider = OpenAlexProvider()
+            works = search_candidate_works(provider, professor_name, institution)
+            st.session_state.candidate_papers = [_work_to_paper(work) for work in works]
+            if not works:
+                st.info("未检索到候选作者或论文，请检查姓名/学校，或改为手动录入。")
+        except Exception as exc:  # noqa: BLE001 - 检索失败必须降级到手动录入
+            st.error(f"检索失败（不影响手动录入）：{exc}")
+            st.session_state.candidate_papers = []
+
+if st.session_state.candidate_papers:
+    st.caption(f"检索到 {len(st.session_state.candidate_papers)} 篇候选论文，勾选确认采用的：")
+    for index, cand in enumerate(st.session_state.candidate_papers):
+        cand["user_confirmed"] = st.checkbox(
+            f"{cand['title']}（{cand['year'] or '年份未知'}）",
+            key=f"cand_paper_{index}",
+            help=cand["source_url"],
+        )
+    paper_values.extend(
+        [cand for cand in st.session_state.candidate_papers if cand["user_confirmed"]]
+    )
 
 can_generate = edited_student is not None and bool(confirmed_fact_ids)
 if st.button("生成报告与邮件草稿", type="primary", disabled=not can_generate):

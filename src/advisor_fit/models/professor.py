@@ -1,7 +1,6 @@
-"""导师画像、作者候选与身份锚点。
+"""导师画像与身份锚点。
 
-身份消歧原则：姓名只用于召回，绝不用于确认；确认需要强证据（官方 ORCID/DBLP/OpenAlex
-链接、官方论文 DOI/题名重合、完整邮箱一致）或无冲突的中证据。
+身份由用户在手动流程中确认；画像区分官方声明（declared）与论文观察（observed）两层。
 """
 
 from __future__ import annotations
@@ -44,20 +43,6 @@ class OfficialIdentityAnchor(BaseModel):
     official_paper_titles: list[str] = []
     declared_interests: list[str] = []
     official_collaborators: list[str] = []
-
-
-class AuthorCandidate(BaseModel):
-    """学术 API 召回的候选作者。"""
-
-    id: str
-    name: str
-    external_ids: ExternalIds = ExternalIds()
-    affiliations: list[str] = []
-    works_count: int | None = None
-    dois: set[str] = set()
-    topics: list[str] = []
-    last_known_institution: str | None = None
-    collaborators: list[str] = []
 
 
 class FactValue(BaseModel):

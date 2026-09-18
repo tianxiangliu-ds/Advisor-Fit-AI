@@ -1,19 +1,12 @@
-"""学术数据 Provider 的协议与数据模型。"""
+"""论文 Work 数据模型。
+
+v0.1 手动证据输入版只保留 Work；作者候选召回与学术 Provider 协议已随
+自动抓取能力移除（历史实现见 Git 标签 v0）。
+"""
 
 from __future__ import annotations
 
-from typing import Protocol
-
 from pydantic import BaseModel
-
-from advisor_fit.models.professor import AuthorCandidate
-
-
-class AuthorQuery(BaseModel):
-    name: str
-    institution: str | None = None
-    aliases: list[str] = []
-    topics: list[str] = []
 
 
 class Work(BaseModel):
@@ -27,13 +20,3 @@ class Work(BaseModel):
     abstract: str = ""
     source_url: str | None = None
     source_platform: str | None = None
-
-
-class AcademicProviderUnavailable(Exception):
-    """学术 API 不可用；调用方应降级而不是伪造空成功。"""
-
-
-class AcademicProvider(Protocol):
-    async def search_authors(self, query: AuthorQuery) -> list[AuthorCandidate]: ...
-
-    async def list_recent_works(self, author_id: str, since_year: int) -> list[Work]: ...

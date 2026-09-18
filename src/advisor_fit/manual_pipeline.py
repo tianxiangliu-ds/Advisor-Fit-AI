@@ -2,18 +2,37 @@
 
 from __future__ import annotations
 
+from pydantic import BaseModel
+
 from advisor_fit.analysis.matching import build_match_report
 from advisor_fit.analysis.professor_profile import assemble_professor_profile
 from advisor_fit.ingest.manual_professor import ManualProfessorInput, build_manual_materials
 from advisor_fit.llm.claims import generate_and_validate_claims
 from advisor_fit.llm.drafting import generate_draft
-from advisor_fit.models.match import Draft
+from advisor_fit.models.common import SourceRecord
+from advisor_fit.models.evidence import Claim, Evidence
+from advisor_fit.models.match import Draft, MatchReport
+from advisor_fit.models.professor import ProfessorProfile
+from advisor_fit.models.resolution import ResolutionResult
 from advisor_fit.models.student import StudentProfile
-from advisor_fit.pipeline import PipelineResult
-from advisor_fit.resolution.author import ResolutionResult
 from advisor_fit.storage.repository import Repository
-from advisor_fit.validation.claims import validate_claims
+from advisor_fit.validation.claims import ValidationResult, validate_claims
 from advisor_fit.validation.draft import DraftValidationResult, validate_draft
+
+
+class PipelineResult(BaseModel):
+    run_id: str
+    student: StudentProfile
+    professor: ProfessorProfile
+    match_report: MatchReport
+    resolution: ResolutionResult
+    claims: list[Claim] = []
+    claim_validation: ValidationResult = ValidationResult()
+    draft: Draft = Draft()
+    draft_validation: DraftValidationResult = DraftValidationResult()
+    evidences: list[Evidence] = []
+    sources: list[SourceRecord] = []
+    warnings: list[str] = []
 
 
 def _confirmed_student(

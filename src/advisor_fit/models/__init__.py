@@ -18,7 +18,6 @@ from advisor_fit.models.match import (
 )
 from advisor_fit.models.professor import (
     AssertedField,
-    AuthorCandidate,
     ExternalIds,
     FactValue,
     ObservedTopic,
@@ -32,7 +31,6 @@ from advisor_fit.models.student import StudentFact, StudentProfile
 
 __all__ = [
     "AssertedField",
-    "AuthorCandidate",
     "Claim",
     "ClaimStatus",
     "Confidence",

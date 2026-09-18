@@ -78,8 +78,8 @@ class AssertedField(BaseModel):
 
 class ObservedTopic(BaseModel):
     topic: str
-    window: str
-    trend: str = "INSUFFICIENT_EVIDENCE"  # EMERGING | SUSTAINED | DECLINING | INSUFFICIENT_EVIDENCE
+    window: str = ""
+    trend: str = "INSUFFICIENT_EVIDENCE"
     confidence: Confidence = Confidence.MEDIUM
     evidence_ids: list[str] = []
 

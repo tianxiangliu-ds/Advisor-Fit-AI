@@ -6,6 +6,8 @@
 
 from __future__ import annotations
 
+import uuid
+
 import streamlit as st
 from pydantic import ValidationError
 
@@ -61,10 +63,25 @@ def _reset_run() -> None:
     _new_run()
 
 
+FACT_FIELDS = ["skill", "degree", "institution", "interest", "project", "publication"]
+
+
 def _fact_rows(student) -> list[dict]:
     return [
-        {"confirmed": False, "field": fact.field, "value": str(fact.value or "")}
+        {"id": fact.id, "confirmed": False, "field": fact.field, "value": str(fact.value or "")}
         for fact in student.facts
+    ]
+
+
+def _add_fact() -> None:
+    st.session_state.student_fact_editor.append(
+        {"id": f"user_{uuid.uuid4().hex[:8]}", "confirmed": False, "field": "skill", "value": ""}
+    )
+
+
+def _remove_fact(row_id: str) -> None:
+    st.session_state.student_fact_editor = [
+        row for row in st.session_state.student_fact_editor if row.get("id") != row_id
     ]
 
 
@@ -176,23 +193,42 @@ confirmed_fact_ids: set[str] = set()
 if student is None:
     st.info("请先上传并解析简历。解析失败时，可在后续版本中完全手动填写。")
 else:
-    st.caption("可以直接编辑、删除错误行，或在表格底部新增遗漏内容。")
-    edited_rows = st.data_editor(
-        st.session_state.student_fact_editor,
-        num_rows="dynamic",
-        hide_index=True,
-        column_config={
-            "confirmed": st.column_config.CheckboxColumn("确认使用", width="small"),
-            "field": st.column_config.SelectboxColumn(
-                "类型",
-                options=["skill", "degree", "institution", "interest", "project", "publication"],
-                width="small",
-            ),
-            "value": st.column_config.TextColumn("内容", width="large"),
-        },
-    )
-    st.session_state.student_fact_editor = edited_rows
-    edited_student = apply_fact_edits(student, list(edited_rows))
+    st.caption("勾选要用于报告/邮件的事实；可改类型与内容，或删除、新增。")
+    h1, h2, h3, h4 = st.columns([0.08, 0.16, 0.68, 0.08], gap="small")
+    h1.caption("确认")
+    h2.caption("类型")
+    h3.caption("内容")
+    h4.caption("删")
+    for index, row in enumerate(st.session_state.student_fact_editor):
+        row_id = row.get("id") or f"row_{index}"
+        c1, c2, c3, c4 = st.columns([0.08, 0.16, 0.68, 0.08], gap="small")
+        with c1:
+            row["confirmed"] = st.checkbox(
+                "确认", value=bool(row.get("confirmed")), key=f"fact_conf_{row_id}",
+                label_visibility="collapsed",
+            )
+        with c2:
+            field = row.get("field") if row.get("field") in FACT_FIELDS else "skill"
+            row["field"] = st.selectbox(
+                "类型", FACT_FIELDS, index=FACT_FIELDS.index(field), key=f"fact_field_{row_id}",
+                label_visibility="collapsed",
+            )
+        with c3:
+            row["value"] = st.text_input(
+                "内容", value=str(row.get("value") or ""), key=f"fact_value_{row_id}",
+                label_visibility="collapsed",
+            )
+        with c4:
+            st.button(
+                "✕",
+                key=f"fact_del_{row_id}",
+                on_click=_remove_fact,
+                args=(row_id,),
+                help="删除此行",
+            )
+
+    st.button("＋ 添加一行", on_click=_add_fact)
+    edited_student = apply_fact_edits(student, st.session_state.student_fact_editor)
     confirmed_fact_ids = edited_student.confirmed_fact_ids()
     if not confirmed_fact_ids:
         st.warning("请至少确认一项真实的学生事实。")

@@ -7,6 +7,7 @@ from pydantic import BaseModel
 from advisor_fit.analysis.matching import build_match_report
 from advisor_fit.analysis.professor_profile import assemble_professor_profile
 from advisor_fit.ingest.manual_professor import ManualProfessorInput, build_manual_materials
+from advisor_fit.llm.analysis import DeepAnalysis, generate_deep_analysis, sanitize_analysis
 from advisor_fit.llm.claims import generate_and_validate_claims
 from advisor_fit.llm.drafting import generate_draft
 from advisor_fit.models.common import SourceRecord
@@ -30,6 +31,7 @@ class PipelineResult(BaseModel):
     claim_validation: ValidationResult = ValidationResult()
     draft: Draft = Draft()
     draft_validation: DraftValidationResult = DraftValidationResult()
+    deep_analysis: DeepAnalysis = DeepAnalysis()
     evidences: list[Evidence] = []
     sources: list[SourceRecord] = []
     warnings: list[str] = []
@@ -83,6 +85,9 @@ def run_manual_pipeline(
     ).model_copy(update={"professor_id": f"professor_{prefix}"})
     match_report = build_match_report(student, professor)
     evidence_map = {evidence.id: evidence for evidence in materials.evidences}
+    deep_analysis = sanitize_analysis(
+        generate_deep_analysis(llm, student, professor), student, evidence_map
+    )
 
     claims = generate_and_validate_claims(llm, {"evidences": evidence_map})
     claim_validation = validate_claims(claims, evidence_map)
@@ -119,6 +124,7 @@ def run_manual_pipeline(
         claim_validation=claim_validation,
         draft=draft,
         draft_validation=draft_validation,
+        deep_analysis=deep_analysis,
         evidences=materials.evidences,
         sources=materials.sources,
         warnings=[],

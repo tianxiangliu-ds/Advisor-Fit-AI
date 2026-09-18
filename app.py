@@ -152,6 +152,24 @@ def _render_report(result) -> None:
     if report.questions_to_ask:
         st.write("建议询问：" + "、".join(report.questions_to_ask))
 
+    deep = getattr(result, "deep_analysis", None)
+    if deep is not None:
+        sections = [
+            ("研究交集", deep.research_intersection),
+            ("方法能力匹配", deep.method_match),
+            ("背景缺口", deep.background_gaps),
+            ("最值得读的论文", deep.recommended_papers),
+            ("联系前应补的知识", deep.knowledge_to_supplement),
+        ]
+        rendered = any(points for _, points in sections)
+        if rendered:
+            st.subheader("深度匹配分析（LLM）")
+            for label, points in sections:
+                if points:
+                    st.write(f"**{label}**")
+                    for point in points:
+                        st.write(f"- {point.text}")
+
     st.subheader("证据来源")
     for evidence in result.evidences:
         label = evidence.title or evidence.id

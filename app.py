@@ -28,7 +28,7 @@ from advisor_fit.ingest.manual_professor import (
 )
 from advisor_fit.llm.provider import NullLLM, build_llm
 from advisor_fit.manual_pipeline import run_manual_pipeline
-from advisor_fit.providers.openalex import OpenAlexProvider, search_candidate_works
+from advisor_fit.providers.dblp import DblpProvider
 from advisor_fit.storage.repository import Repository
 
 
@@ -69,7 +69,7 @@ FACT_FIELDS = ["skill", "degree", "institution", "interest", "project", "publica
 
 def _fact_rows(student) -> list[dict]:
     return [
-        {"id": fact.id, "confirmed": False, "field": fact.field, "value": str(fact.value or "")}
+        {"id": fact.id, "confirmed": True, "field": fact.field, "value": str(fact.value or "")}
         for fact in student.facts
     ]
 
@@ -86,6 +86,14 @@ def _remove_fact(row_id: str) -> None:
     ]
 
 
+def _set_all_facts(confirmed: bool) -> None:
+    for row in st.session_state.student_fact_editor:
+        row["confirmed"] = confirmed
+    for key in list(st.session_state.keys()):
+        if key.startswith("fact_conf_"):
+            del st.session_state[key]
+
+
 def _split_terms(value: str) -> list[str]:
     normalized = value.replace("，", ",").replace("；", ",").replace(";", ",")
     return [item.strip() for item in normalized.split(",") if item.strip()]
@@ -95,9 +103,9 @@ def _work_to_paper(work) -> dict:
     return {
         "title": work.title,
         "year": work.year,
-        "abstract": work.abstract or "（OpenAlex 未提供摘要）",
+        "abstract": work.abstract or "（未提供摘要，请手动补充）",
         "source_url": work.source_url or "",
-        "source_platform": work.source_platform or "OpenAlex",
+        "source_platform": work.source_platform or "DBLP",
         "keywords": work.topics or [],
         "user_confirmed": False,
     }
@@ -207,7 +215,12 @@ confirmed_fact_ids: set[str] = set()
 if student is None:
     st.info("请先上传并解析简历。解析失败时，可在后续版本中完全手动填写。")
 else:
-    st.caption("勾选要用于报告/邮件的事实；可改类型与内容，或删除、新增。")
+    st.caption("已默认勾选简历中解析出的全部事实，取消勾选你不想使用的项即可。")
+    col_all, col_none, _ = st.columns([0.1, 0.12, 0.78], gap="small")
+    if col_all.button("全选"):
+        _set_all_facts(True)
+    if col_none.button("全不选"):
+        _set_all_facts(False)
     h1, h2, h3, h4 = st.columns([0.08, 0.16, 0.68, 0.08], gap="small")
     h1.caption("确认")
     h2.caption("类型")
@@ -295,20 +308,20 @@ for index in range(paper_count):
             }
         )
 
-st.markdown("**或从 OpenAlex 检索候选论文（可选，需联网）**")
-st.caption("检索结果仅供参考，必须由你确认归属后才可用。")
+st.markdown("**或从 DBLP 检索候选论文（可选，需联网）**")
+st.caption("检索结果仅供参考，必须由你确认归属后才可用；DBLP 主要收录计算机领域论文。")
 if "candidate_papers" not in st.session_state:
     st.session_state.candidate_papers = []
-if st.button("🔍 检索候选论文"):
+if st.button("🔍 检索候选论文（DBLP）"):
     if not professor_name.strip():
         st.error("请先填写导师姓名")
     else:
         try:
-            provider = OpenAlexProvider()
-            works = search_candidate_works(provider, professor_name, institution)
+            provider = DblpProvider()
+            works = provider.search_publications(professor_name)
             st.session_state.candidate_papers = [_work_to_paper(work) for work in works]
             if not works:
-                st.info("未检索到候选作者或论文，请检查姓名/学校，或改为手动录入。")
+                st.info("未检索到候选论文，请检查姓名，或改为手动录入。")
         except Exception as exc:  # noqa: BLE001 - 检索失败必须降级到手动录入
             st.error(f"检索失败（不影响手动录入）：{exc}")
             st.session_state.candidate_papers = []

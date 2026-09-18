@@ -16,6 +16,8 @@ class Settings(BaseSettings):
     llm_model: str = ""      # 留空则用 provider 默认模型
     llm_store: bool = False
 
+    wanfang_app_key: str = ""
+
     data_dir: Path = Path("data")
     uploads_dir: Path = Path("uploads")
     exports_dir: Path = Path("exports")

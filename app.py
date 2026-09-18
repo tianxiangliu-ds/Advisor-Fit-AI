@@ -28,7 +28,7 @@ from advisor_fit.ingest.manual_professor import (
 )
 from advisor_fit.llm.provider import NullLLM, build_llm
 from advisor_fit.manual_pipeline import run_manual_pipeline
-from advisor_fit.providers.dblp import DblpProvider
+from advisor_fit.providers.wanfang import WanfangProvider
 from advisor_fit.storage.repository import Repository
 
 
@@ -105,7 +105,7 @@ def _work_to_paper(work) -> dict:
         "year": work.year,
         "abstract": work.abstract or "（未提供摘要，请手动补充）",
         "source_url": work.source_url or "",
-        "source_platform": work.source_platform or "DBLP",
+        "source_platform": work.source_platform or "万方",
         "keywords": work.topics or [],
         "user_confirmed": False,
     }
@@ -395,16 +395,18 @@ for index in range(paper_count):
             }
         )
 
-st.markdown("**或从 DBLP 检索候选论文（可选，需联网）**")
-st.caption("检索结果仅供参考，必须由你确认归属后才可用；DBLP 主要收录计算机领域论文。")
+st.markdown("**或从万方检索候选论文（可选，需联网 + 万方 appkey）**")
+st.caption("检索结果仅供参考，必须由你确认归属后才可用；万方覆盖中文期刊/会议/学位论文。")
 if "candidate_papers" not in st.session_state:
     st.session_state.candidate_papers = []
-if st.button("🔍 检索候选论文（DBLP）"):
-    if not professor_name.strip():
+if st.button("🔍 检索候选论文（万方）"):
+    if not settings.wanfang_app_key:
+        st.error("请先在 .env 里配置 WANFANG_APP_KEY（万方数据开放平台申请）")
+    elif not professor_name.strip():
         st.error("请先填写导师姓名")
     else:
         try:
-            provider = DblpProvider()
+            provider = WanfangProvider(settings.wanfang_app_key)
             works = provider.search_publications(professor_name)
             st.session_state.candidate_papers = [_work_to_paper(work) for work in works]
             if not works:

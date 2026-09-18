@@ -1,0 +1,23 @@
+{
+  "results": [
+    {
+      "id": "https://openalex.org/A123",
+      "display_name": "Wei Wang",
+      "ids": {
+        "openalex": "https://openalex.org/A123",
+        "orcid": "https://orcid.org/0000-0002-1234-5678"
+      },
+      "works_count": 42,
+      "affiliations": [
+        {"institution": {"display_name": "武汉大学"}}
+      ],
+      "last_known_institutions": [
+        {"display_name": "武汉大学"}
+      ],
+      "topics": [
+        {"display_name": "信息检索"}
+      ]
+    }
+  ],
+  "meta": {"count": 1}
+}

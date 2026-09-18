@@ -1,0 +1,17 @@
+{
+  "results": [
+    {
+      "id": "https://openalex.org/W123",
+      "title": "Retrieval-Augmented Generation",
+      "publication_year": 2026,
+      "doi": "https://doi.org/10.1234/rag",
+      "cited_by_count": 10,
+      "primary_location": {"source": {"display_name": "ACL"}},
+      "concepts": [
+        {"display_name": "Retrieval"},
+        {"display_name": "Generation"}
+      ]
+    }
+  ],
+  "meta": {"count": 1}
+}

@@ -94,3 +94,11 @@ def test_delete_run_rejects_path_like_id(tmp_path):
 def test_delete_missing_run_is_noop(tmp_path):
     repo = Repository(tmp_path / "test.db")
     repo.delete_run(str(uuid.uuid4()))  # 合法 UUID 但不存在，不应抛错
+
+
+def test_list_runs_returns_created_runs(tmp_path):
+    repo = Repository(tmp_path / "test.db")
+    run1 = repo.create_run()
+    run2 = repo.create_run()
+    ids = {run["id"] for run in repo.list_runs()}
+    assert {run1, run2} <= ids

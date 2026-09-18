@@ -172,6 +172,30 @@ def _render_draft(result) -> None:
         st.warning("邮件中仍有未通过校验的句子，请不要直接发送。")
 
 
+def _load_run_view(repo, run_id):
+    """从数据库重建可展示的历史结果（仅报告所需字段）。"""
+    from types import SimpleNamespace
+
+    from advisor_fit.models.evidence import Evidence
+    from advisor_fit.models.match import Draft, MatchReport
+    from advisor_fit.models.professor import ProfessorProfile
+    from advisor_fit.validation.draft import DraftValidationResult
+
+    professor_data = repo.load_latest(run_id, "professor_profile")
+    match_data = repo.load_latest(run_id, "match")
+    draft_data = repo.load_latest(run_id, "draft")
+    if not (professor_data and match_data and draft_data):
+        return None
+    return SimpleNamespace(
+        run_id=run_id,
+        professor=ProfessorProfile(**professor_data),
+        match_report=MatchReport(**match_data),
+        draft=Draft(**draft_data),
+        draft_validation=DraftValidationResult(),
+        evidences=[Evidence(**data) for data in repo.load_artifacts(run_id, "evidence")],
+    )
+
+
 st.set_page_config(page_title="导师双选 AI 助手 v0.1", layout="wide")
 st.title("导师双选 AI 助手 v0.1")
 st.caption("人工核实资料输入 · 本地优先 · 不依赖 OpenAlex · 不自动发送邮件")
@@ -186,6 +210,30 @@ for key, default in (
         st.session_state[key] = default
 if "repo" not in st.session_state:
     _new_run()
+
+with st.sidebar:
+    st.header("📁 历史记录")
+    runs = st.session_state.repo.list_runs()
+    completed = [run for run in runs if run["status"] == "COMPLETED"]
+    if not completed:
+        st.caption("暂无已完成的记录")
+    for run in completed[:20]:
+        label = f"{run['id'][:8]} · {(run['created_at'] or '')[:16]}"
+        if st.button(label, key=f"hist_{run['id']}"):
+            view = _load_run_view(st.session_state.repo, run["id"])
+            if view is not None:
+                st.session_state.viewed_run = view
+
+if st.session_state.get("viewed_run") is not None:
+    st.header("📁 历史报告")
+    st.caption(f"运行 ID：{st.session_state.viewed_run.run_id}")
+    _render_report(st.session_state.viewed_run)
+    st.subheader("邮件草稿")
+    _render_draft(st.session_state.viewed_run)
+    if st.button("关闭历史报告"):
+        st.session_state.pop("viewed_run", None)
+        st.rerun()
+    st.divider()
 
 
 st.header("① 上传并确认简历")

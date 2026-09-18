@@ -105,6 +105,13 @@ class Repository:
             ).fetchone()
         return int(row["n"])
 
+    def list_runs(self) -> list[dict[str, Any]]:
+        with closing(self._connect()) as conn:
+            rows = conn.execute(
+                "SELECT id, status, created_at, updated_at FROM runs ORDER BY created_at DESC"
+            ).fetchall()
+        return [dict(row) for row in rows]
+
     # -- 持久化 artifact ------------------------------------------------------
 
     def save_artifact(

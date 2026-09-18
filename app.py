@@ -143,8 +143,8 @@ def _render_report(result) -> None:
 def _render_draft(result) -> None:
     draft = result.draft
     st.write(f"主题：{draft.subject or '（无）'}")
-    for sentence in draft.sentences:
-        st.write(sentence.text)
+    body = "\n".join(sentence.text for sentence in draft.sentences)
+    st.code(body, language=None)
     if draft.warnings:
         st.info("；".join(draft.warnings))
     if not result.draft_validation.ok:

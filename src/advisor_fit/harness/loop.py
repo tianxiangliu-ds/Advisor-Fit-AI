@@ -38,10 +38,17 @@ def run_loop(
     task: str,
     *,
     max_steps: int = 5,
+    resume_steps: list[dict] | None = None,
+    granted_confirmations: list[str] | None = None,
 ) -> list[dict]:
-    """反复「LLM 决策 → 执行工具 → 结果回传」，直到 done/confirm 或步数用尽。"""
+    """反复「LLM 决策 → 执行工具 → 结果回传」，直到 done/confirm 或步数用尽。
+
+    支持断点续跑：传入 resume_steps（上轮已产生的步骤）与 granted_confirmations
+    （用户已确认的消息），遇到相同的 confirm 时视为已授权，继续循环而非再次暂停。
+    """
     tool_map = {name: fn for name, _, fn in tools}
-    steps: list[dict] = []
+    steps = list(resume_steps or [])
+    granted = set(granted_confirmations or [])
     for _ in range(max_steps):
         payload = {
             "task": task,
@@ -63,6 +70,9 @@ def run_loop(
             steps.append({"done": decision.message})
             return steps
         if decision.action == "confirm":
+            if decision.message in granted:
+                steps.append({"confirmed": decision.message})
+                continue
             steps.append({"needs_confirmation": decision.message})
             return steps
         if decision.action == "tool":

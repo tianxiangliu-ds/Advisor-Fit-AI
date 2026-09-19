@@ -100,20 +100,6 @@ def test_wanfang_english_source_uses_english_collection():
     assert captured["body"]["collections"] == ["OpenPeriodicalEng"]
 
 
-def test_wanfang_thesis_source_uses_thesis_collection():
-    captured = {}
-
-    def handler(request: httpx.Request) -> httpx.Response:
-        captured["body"] = json.loads(request.content)
-        return httpx.Response(200, json={"documents": [], "numFound": "0"})
-
-    provider = WanfangProvider(
-        "test-key", client=httpx.Client(transport=httpx.MockTransport(handler))
-    )
-    provider.search_publications("陆伟", source="thesis")
-    assert captured["body"]["collections"] == ["OpenThesis"]
-
-
 def test_wanfang_english_source_groups_split_author_tokens():
     def handler(request: httpx.Request) -> httpx.Response:
         return httpx.Response(

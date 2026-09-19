@@ -17,13 +17,11 @@ _BASE_URL = "https://api.wfdata.com/openwanfang/getQuery"
 COLLECTION_PRESETS: dict[str, list[str]] = {
     "zh": ["OpenPeriodical", "OpenConference"],
     "en": ["OpenPeriodicalEng"],
-    "thesis": ["OpenThesis"],
 }
 
 SOURCE_LABELS: dict[str, str] = {
     "zh": "万方 · 中文（期刊 + 会议）",
     "en": "万方 · 英文（英文期刊）",
-    "thesis": "万方 · 学位论文",
 }
 
 
@@ -90,7 +88,7 @@ class WanfangProvider:
         source: str = "zh",
         limit: int = 20,
     ) -> list[Work]:
-        collections = COLLECTION_PRESETS.get(source, COLLECTION_PRESETS["zh"])
+        collections = COLLECTION_PRESETS.get(source) or COLLECTION_PRESETS["zh"]
         query = f"Creator:{name}"
         if institution:
             query = f"Creator:{name} AND OrganizationForSearch:{institution}"

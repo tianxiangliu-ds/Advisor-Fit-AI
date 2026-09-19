@@ -11,6 +11,7 @@ import uuid
 import streamlit as st
 from pydantic import ValidationError
 
+from advisor_fit.agents.research import research_professor
 from advisor_fit.config import settings
 from advisor_fit.export.report import export_docx, export_json, export_markdown
 from advisor_fit.ingest.cv import (
@@ -21,6 +22,7 @@ from advisor_fit.ingest.cv import (
     extract_pdf_text,
 )
 from advisor_fit.ingest.cv_llm import build_student_profile_llm
+from advisor_fit.ingest.homepage import extract_homepage_profile
 from advisor_fit.ingest.manual_professor import (
     ManualPaperInput,
     ManualProfessorInput,
@@ -28,7 +30,7 @@ from advisor_fit.ingest.manual_professor import (
 )
 from advisor_fit.llm.provider import NullLLM, build_llm
 from advisor_fit.manual_pipeline import run_manual_pipeline
-from advisor_fit.providers.wanfang import SOURCE_LABELS, WanfangProvider
+from advisor_fit.providers.wanfang import WanfangProvider
 from advisor_fit.storage.repository import Repository
 
 
@@ -99,44 +101,29 @@ def _split_terms(value: str) -> list[str]:
     return [item.strip() for item in normalized.split(",") if item.strip()]
 
 
-def _work_to_paper(work) -> dict:
-    return {
-        "title": work.title,
-        "year": work.year,
-        "abstract": work.abstract or "（未提供摘要，请手动补充）",
-        "source_url": work.source_url or "",
-        "source_platform": work.source_platform or "万方",
-        "keywords": work.topics or [],
-        "user_confirmed": False,
-        "authors": work.authors,
-        "institution": work.institution,
-        "venue": work.venue or "",
-    }
-
-
-def _search_via_agent(
-    llm, name: str, institution: str | None, source: str = "zh"
-) -> list[dict]:
-    """用 Harness 循环让 Agent 决策检索；无 LLM 时直接检索。"""
-    from advisor_fit.harness.loop import run_loop
-
+def _run_research(name: str, institution: str, mode: str, english_name: str) -> None:
+    """用导师研究 Agent 检索并消歧，结果与确认门控写入 session_state。"""
     provider = WanfangProvider(settings.wanfang_app_key)
-
-    def search_papers(name: str, institution: str | None = None) -> dict:
-        works = provider.search_publications(name, institution=institution, source=source)
-        return {"papers": [_work_to_paper(work) for work in works]}
-
-    if isinstance(llm, NullLLM):
-        return search_papers(name, institution).get("papers", [])
-
-    label = SOURCE_LABELS.get(source, source)
-    tools = [("search_papers", f"在{label}中按姓名和学校检索候选论文", search_papers)]
-    task = f"检索导师 {name} 的论文（数据源：{label}）"
-    steps = run_loop(llm, tools, task)
-    for step in steps:
-        if step.get("tool") == "search_papers" and isinstance(step.get("result"), dict):
-            return step["result"].get("papers", [])
-    return []
+    source = None if mode == "auto" else mode
+    result = research_professor(
+        _llm(),
+        provider,
+        name=name,
+        institution=institution or None,
+        english_name=english_name or None,
+        source=source,
+        resume_steps=st.session_state.get("_research_steps"),
+        granted_confirmations=st.session_state.get("_research_granted", []),
+    )
+    if result.needs_confirmation:
+        st.session_state["_research_confirm"] = result.needs_confirmation
+        st.session_state["_research_steps"] = result.log
+        st.session_state.candidate_papers = []
+    else:
+        st.session_state.pop("_research_confirm", None)
+        st.session_state["_research_steps"] = None
+        st.session_state["_research_granted"] = []
+        st.session_state.candidate_papers = result.papers
 
 
 _FIT_BADGES = {
@@ -421,17 +408,60 @@ else:
 
 
 st.header("③ 导师资料与已核实论文")
-st.caption("本版本不抓取导师网页。请填写你已人工核实的信息与论文摘要。")
+st.caption("可粘贴导师主页链接自动解析并检索；手动填写的字段作为解析失败时的保障。")
+
+for _key in (
+    "prof_name",
+    "prof_institution",
+    "prof_department",
+    "prof_title",
+    "prof_email",
+    "prof_interests",
+    "prof_homepage",
+    "prof_english_name",
+):
+    st.session_state.setdefault(_key, "")
+
+homepage_url = st.text_input("导师主页链接（可选，用于自动解析）", key="prof_homepage")
+if st.button("🔍 解析主页并自动检索"):
+    url = homepage_url.strip()
+    if not url:
+        st.error("请先填写主页链接")
+    else:
+        try:
+            with st.spinner("正在解析主页…"):
+                profile = extract_homepage_profile(url, _llm())
+            if profile.name:
+                st.session_state["prof_name"] = profile.name
+            if profile.institution:
+                st.session_state["prof_institution"] = profile.institution
+            if profile.department:
+                st.session_state["prof_department"] = profile.department
+            if profile.title:
+                st.session_state["prof_title"] = profile.title
+            if profile.email:
+                st.session_state["prof_email"] = profile.email
+            if profile.declared_interests:
+                st.session_state["prof_interests"] = "、".join(profile.declared_interests)
+            if profile.name:
+                st.session_state["_research_steps"] = None
+                st.session_state["_research_granted"] = []
+                st.session_state["_auto_search"] = True
+            st.success("已解析主页，字段已填入下方表格，请核对后继续。")
+        except Exception as exc:  # noqa: BLE001 - 解析失败降级到手动录入
+            st.error(f"主页解析失败（不影响手动录入）：{exc}")
+
 left, right = st.columns(2)
 with left:
-    professor_name = st.text_input("导师姓名（必填）")
-    institution = st.text_input("学校/单位（必填）")
-    department = st.text_input("院系（可选）")
-    professor_title = st.text_input("职称（可选）")
+    professor_name = st.text_input("导师姓名（必填）", key="prof_name")
+    institution = st.text_input("学校/单位（必填）", key="prof_institution")
+    department = st.text_input("院系（可选）", key="prof_department")
+    professor_title = st.text_input("职称（可选）", key="prof_title")
 with right:
-    homepage_url = st.text_input("官方主页链接（可选）")
-    professor_email = st.text_input("导师邮箱（可选）")
-    declared_interests_text = st.text_area("官网公开研究方向（可选，用逗号或分号分隔）")
+    professor_email = st.text_input("导师邮箱（可选）", key="prof_email")
+    declared_interests_text = st.text_area(
+        "官网公开研究方向（可选，用逗号或分号分隔）", key="prof_interests"
+    )
 identity_confirmed = st.checkbox("我已核对并确认以上信息属于目标导师")
 paper_read_confirmed = st.checkbox("我已阅读以上论文（可选，允许邮件提及）")
 
@@ -469,50 +499,59 @@ for index in range(paper_count):
         )
 
 st.markdown("**或从万方检索候选论文（可选，需联网 + 万方 appkey）**")
-st.caption("检索结果仅供参考，必须由你确认归属后才可用；建议先填写学校/单位以减少同名歧义，结果按年份倒序。")
-selected_source = st.radio(
-    "数据源",
-    list(SOURCE_LABELS),
-    format_func=lambda key: SOURCE_LABELS[key],
+st.caption("Agent 会自动选择中/英文库、按学校消歧并排除疑似同名；结果仍须你逐条确认归属。")
+selected_mode = st.radio(
+    "检索方式",
+    ["auto", "zh", "en"],
+    format_func=lambda k: {"auto": "自动（推荐）", "zh": "仅中文", "en": "仅英文"}[k],
     horizontal=True,
-    key="search_source",
+    key="search_mode",
 )
-search_name = professor_name
-if selected_source == "en":
-    st.caption("英文库只收录英文文献，必须用导师的英文名检索（如 Wei Lu、Lu Wei）。")
-    st.caption("英文库的机构字段常为空，学校过滤基本无效，更容易混入同名作者，请务必逐条核对。")
-    english_name = st.text_input("导师英文名（英文库必填）", key="professor_english_name")
-    if english_name.strip():
-        search_name = english_name.strip()
-elif selected_source == "thesis":
-    st.caption(
-        "学位论文库收录的是论文作者（学生），且不提供「导师」字段，"
-        "按导师姓名检索会返回同名学生的论文，很容易误判，建议仅在导师姓名罕见时使用。"
-    )
+english_name = st.text_input("导师英文名（英文检索时使用，可选）", key="prof_english_name")
+search_name = english_name.strip() if selected_mode == "en" else professor_name.strip()
+
 if "candidate_papers" not in st.session_state:
     st.session_state.candidate_papers = []
-if st.button("🔎 一键研究（Agent）"):
+
+
+def _trigger_search() -> None:
     if not settings.wanfang_app_key:
         st.error("请先在 .env 里配置 WANFANG_APP_KEY（万方数据开放平台申请）")
-    elif not search_name.strip():
+        return
+    if selected_mode == "en" and not english_name.strip():
+        st.error("仅英文检索需要填写「导师英文名」")
+        return
+    if not search_name:
         st.error("请先填写导师姓名")
-    elif selected_source == "en" and search_name == professor_name:
-        st.error("英文库只收录英文文献，请先填写「导师英文名」")
-    else:
-        try:
-            papers = _search_via_agent(
-                _llm(), search_name.strip(), institution.strip() or None, selected_source
-            )
-            st.session_state.candidate_papers = papers
-            if not papers:
-                st.info("未检索到候选论文，请检查姓名，或改为手动录入。")
-        except Exception as exc:  # noqa: BLE001 - 检索失败必须降级到手动录入
-            st.error(f"检索失败（不影响手动录入）：{exc}")
-            st.session_state.candidate_papers = []
+        return
+    try:
+        with st.spinner("Agent 正在检索与消歧…"):
+            _run_research(search_name, institution.strip(), selected_mode, english_name.strip())
+    except Exception as exc:  # noqa: BLE001 - 检索失败降级到手动录入
+        st.error(f"检索失败（不影响手动录入）：{exc}")
+        st.session_state.candidate_papers = []
 
-if st.session_state.candidate_papers:
-    st.caption(f"检索到 {len(st.session_state.candidate_papers)} 篇候选论文，勾选确认采用的：")
-    for index, cand in enumerate(st.session_state.candidate_papers):
+
+if st.button("🔎 一键研究（Agent）"):
+    _trigger_search()
+
+if st.session_state.get("_auto_search"):
+    st.session_state["_auto_search"] = False
+    _trigger_search()
+
+if st.session_state.get("_research_confirm"):
+    st.warning(f"Agent 请求确认：{st.session_state['_research_confirm']}")
+    if st.button("✅ 确认并继续"):
+        st.session_state["_research_granted"] = [st.session_state["_research_confirm"]]
+        _trigger_search()
+
+papers = st.session_state.candidate_papers
+if papers:
+    belongs_idx = [i for i, paper in enumerate(papers) if paper.get("belongs", True)]
+    homonym_idx = [i for i, paper in enumerate(papers) if not paper.get("belongs", True)]
+    st.caption(f"检索到 {len(papers)} 篇候选论文，勾选确认采用的：")
+    for i in belongs_idx:
+        cand = papers[i]
         label = f"{cand['title']}（{cand['year'] or '年份未知'}）"
         if cand.get("venue"):
             label += f" · {cand['venue']}"
@@ -520,12 +559,24 @@ if st.session_state.candidate_papers:
             label += f" · {cand['institution']}"
         if cand.get("authors"):
             label += f"〔{'、'.join(cand['authors'])}〕"
-        cand["user_confirmed"] = st.checkbox(
-            label, key=f"cand_paper_{index}", help=cand["source_url"]
-        )
-    paper_values.extend(
-        [cand for cand in st.session_state.candidate_papers if cand["user_confirmed"]]
-    )
+        cand["user_confirmed"] = st.checkbox(label, key=f"cand_paper_{i}", help=cand["source_url"])
+    if homonym_idx:
+        with st.expander(
+            f"⚠ 疑似同名论文（{len(homonym_idx)} 篇，Agent 已排除，可手动加回）"
+        ):
+            for i in homonym_idx:
+                cand = papers[i]
+                label = f"{cand['title']}（{cand['year'] or '年份未知'}）"
+                if cand.get("institution"):
+                    label += f" · {cand['institution']}"
+                if cand.get("authors"):
+                    label += f"〔{'、'.join(cand['authors'])}〕"
+                if cand.get("disambig_reason"):
+                    label += f" — {cand['disambig_reason']}"
+                cand["user_confirmed"] = st.checkbox(
+                    label, key=f"cand_paper_{i}", help=cand["source_url"]
+                )
+    paper_values.extend([cand for cand in papers if cand["user_confirmed"]])
 
 can_generate = edited_student is not None and bool(confirmed_fact_ids)
 if st.button("生成报告与邮件草稿", type="primary", disabled=not can_generate):

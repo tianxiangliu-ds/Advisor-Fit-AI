@@ -40,6 +40,32 @@ def test_run_loop_stops_on_confirmation_request():
     assert steps[-1] == {"needs_confirmation": "请确认王伟是否为武汉大学教授"}
 
 
+def test_run_loop_resumes_past_granted_confirmation():
+    calls = []
+
+    def search(name):
+        calls.append(name)
+        return {"papers": [name]}
+
+    llm = FakeLLM(
+        [
+            AgentDecision(action="confirm", message="确认是武汉大学的王伟吗？"),
+            AgentDecision(action="tool", tool="search", args={"name": "王伟"}),
+            AgentDecision(action="done", message="完成"),
+        ]
+    )
+    steps = run_loop(
+        llm,
+        [("search", "检索", search)],
+        "整理王伟的论文",
+        resume_steps=[{"needs_confirmation": "确认是武汉大学的王伟吗？"}],
+        granted_confirmations=["确认是武汉大学的王伟吗？"],
+    )
+    assert calls == ["王伟"]
+    assert steps[0] == {"needs_confirmation": "确认是武汉大学的王伟吗？"}
+    assert steps[-1] == {"done": "完成"}
+
+
 def test_run_loop_survives_tool_error():
     def broken(**kwargs):
         raise RuntimeError("boom")

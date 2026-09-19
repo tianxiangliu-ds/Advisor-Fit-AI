@@ -122,10 +122,22 @@ def _faculty_id(university: str, college: str, name: str, homepage_url: str) -> 
     return hashlib.sha256(raw).hexdigest()[:16]
 
 
+def _heuristic_faculty_links(links: list[dict]) -> list[FacultyLink]:
+    """启发式识别教师链接：2-4 个汉字的锚文本，且 href 指向详情页。"""
+    detail_hint = ("content.jsp", "/info/", "teacher", "faculty", "/js/", "/szdw/", "xyjl")
+    return [
+        FacultyLink(name=link["text"], href=link["href"])
+        for link in links
+        if re.fullmatch(r"[一-龥·]{2,4}", link["text"])
+        and any(hint in link["href"] for hint in detail_hint)
+    ]
+
+
 def extract_faculty_list(
     html: str, base_url: str, llm, *, university: str, college: str
 ) -> list[FacultyLink]:
     links = extract_links(html, base_url)
+    heuristic = _heuristic_faculty_links(links)
     payload = {
         "university": university,
         "college": college,
@@ -136,13 +148,9 @@ def extract_faculty_list(
             schema=FacultyListOutput, instructions=_LIST_INSTRUCTIONS, payload=payload
         )
     except Exception:  # noqa: BLE001 - 无 LLM 时用启发式
-        return [
-            FacultyLink(name=link["text"], href=link["href"])
-            for link in links
-            if re.fullmatch(r"[一-龥]{2,4}", link["text"])
-        ]
-    if not isinstance(output, FacultyListOutput):
-        return []
+        return heuristic
+    if not isinstance(output, FacultyListOutput) or not output.faculty:
+        return heuristic
     return output.faculty
 
 

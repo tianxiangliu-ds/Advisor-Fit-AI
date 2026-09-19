@@ -2,6 +2,7 @@
 
 from advisor_fit.agents.research import (
     ResearchResult,
+    _fingerprint_prefilter,
     _institutions_conflict,
     _investigate_affiliations,
     _merge_search_results,
@@ -202,6 +203,33 @@ def test_research_professor_searches_alternative_institution():
     )
     assert ("林华珍", "西南财经大学", "zh") in provider.calls
     assert ("林华珍", "武汉大学", "zh") in provider.calls
+
+
+def test_fingerprint_prefilter_drops_conflicting_homonym_without_stable_coauthors():
+    papers = [
+        {"title": "A", "institution": "武汉大学", "authors": ["陆伟", "黄永"],
+         "belongs": True, "needs_review": False},
+        {"title": "B", "institution": "武汉大学", "authors": ["陆伟", "黄永", "程齐凯"],
+         "belongs": True, "needs_review": False},
+        {"title": "C", "institution": "中国药科大学", "authors": ["陆伟", "张三"],
+         "belongs": True, "needs_review": False},
+    ]
+    result = _fingerprint_prefilter(papers, "陆伟", "武汉大学")
+    # 黄永是稳定合作者；C 机构不符且无稳定合作者交集 → 判同名
+    assert result[2]["belongs"] is False
+
+
+def test_fingerprint_prefilter_keeps_career_move_with_stable_coauthors():
+    papers = [
+        {"title": "A", "institution": "武汉大学", "authors": ["陆伟", "黄永"],
+         "belongs": True, "needs_review": False},
+        {"title": "B", "institution": "西南财经大学", "authors": ["陆伟", "黄永"],
+         "belongs": True, "needs_review": True},
+    ]
+    result = _fingerprint_prefilter(papers, "陆伟", "武汉大学")
+    # B 机构不符但共享稳定合作者黄永 → 保留（疑似调动）
+    assert result[1]["belongs"] is True
+    assert result[1]["needs_review"] is True
 
 
 def test_investigate_affiliations_adds_previous_institution_papers():

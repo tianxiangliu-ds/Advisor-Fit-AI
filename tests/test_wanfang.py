@@ -137,6 +137,18 @@ def test_wanfang_english_source_groups_split_author_tokens():
     assert works[0].venue == "IEEE Access"
 
 
+def test_wanfang_client_side_institution_filter_drops_homonyms():
+    from advisor_fit.providers.academic import Work
+
+    works = [
+        Work(id="1", title="匹配", institution="武汉大学信息管理学院"),
+        Work(id="2", title="同名", institution="中国药科大学"),
+        Work(id="3", title="空机构", institution=""),
+    ]
+    kept = WanfangProvider._filter_by_institution(works, "武汉大学")
+    assert [w.title for w in kept] == ["匹配", "空机构"]
+
+
 def test_group_english_authors_keeps_surname_initial_pairs():
     assert group_english_authors(["Fan", "A.", "Y.", "Zhang", "Q."]) == [
         "Fan A. Y.",

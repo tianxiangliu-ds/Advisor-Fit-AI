@@ -156,7 +156,23 @@ class WanfangProvider:
         query = f"Creator:{name}"
         if institution:
             query = f"Creator:{name} AND OrganizationForSearch:{institution}"
-        return self._parse_works(self._post(collections, query, limit), source)
+        works = self._parse_works(self._post(collections, query, limit), source)
+        if institution:
+            works = self._filter_by_institution(works, institution)
+        return works
+
+    @staticmethod
+    def _filter_by_institution(works: list[Work], institution: str) -> list[Work]:
+        """客户端兜底过滤：万方的 OrganizationForSearch 不可靠，按 OrganizationNorm 再筛一次。
+
+        保留机构为空（无法判断）或与目标机构互含的论文，剔除明显不符的同名论文。
+        """
+        kept: list[Work] = []
+        for work in works:
+            winst = (work.institution or "").strip()
+            if not winst or institution in winst or winst in institution:
+                kept.append(work)
+        return kept
 
     def search_by_title(
         self, title: str, *, source: str = "zh", limit: int = 5

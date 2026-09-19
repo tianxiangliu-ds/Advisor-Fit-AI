@@ -9,6 +9,7 @@
 
 from __future__ import annotations
 
+from collections import Counter
 from dataclasses import dataclass, field
 
 from pydantic import BaseModel
@@ -55,10 +56,11 @@ _DISAMBIG_INSTRUCTIONS = (
     "判断每篇候选论文是否属于目标导师本人（而非同名作者）。"
     "依据：论文机构是否匹配、合作作者是否稳定、研究主题是否连续。"
     "belongs 取 true 表示属于该导师，false 表示同名他人。"
-    "若论文机构与目标学校不同、但研究主题或合作作者与该导师连续，"
-    "可能是导师曾任职单位或刚调动，此时 belongs 取 true 且 needs_review 取 true，"
-    "reason 用中文说明「机构不同、疑似调动」；只有领域明显不同才 belongs=false。"
-    "不确定时 belongs 取 true（保留给用户人工确认）。"
+    "若论文机构与目标学校明显不同，且研究领域/主题也明显不同（如医学 vs 计算机），"
+    "应 belongs=false，不要因为姓名相同就保留。"
+    "若论文机构不同、但研究主题或合作作者与该导师方向明显连续（疑似曾任职/调动），"
+    "belongs 取 true 且 needs_review 取 true，reason 用中文说明「机构不同、疑似调动」。"
+    "机构为空或信息不足以判断时，belongs 取 true 保留给用户人工确认。"
     "index 必须与 payload 中每篇论文的 index 一一对应，不要遗漏。"
 )
 
@@ -81,6 +83,38 @@ def _rule_disambiguate(papers: list[dict], institution: str | None) -> list[dict
             paper["disambig_reason"] = (
                 f"机构与填写学校不同（{paper.get('institution')}），可能为曾任职单位"
             )
+    return papers
+
+
+def _fingerprint_prefilter(
+    papers: list[dict], professor_name: str, institution: str | None
+) -> list[dict]:
+    """合作者指纹预筛：机构不符且与「稳定合作者集合」无交集的，直接判为同名。
+
+    稳定合作者 = 在候选池中出现 ≥2 次的非本人作者。只有当存在稳定团队信号时才触发，
+    避免误伤独自署名或一次性合作的真实论文。
+    """
+    coauthor = Counter()
+    for paper in papers:
+        for author in paper.get("authors", []):
+            author = str(author).strip()
+            if author and author != (professor_name or "").strip():
+                coauthor[author] += 1
+    stable = {a for a, n in coauthor.items() if n >= 2}
+    if not stable:
+        return papers
+
+    for paper in papers:
+        if paper.get("belongs") is False:
+            continue
+        if not _institutions_conflict(paper.get("institution", ""), institution):
+            continue
+        authors = {str(a).strip() for a in paper.get("authors", [])}
+        if authors & stable:
+            continue
+        paper["belongs"] = False
+        paper["needs_review"] = False
+        paper["disambig_reason"] = "机构不符且合作者无交集，疑似同名"
     return papers
 
 
@@ -112,10 +146,14 @@ def disambiguate_papers(
             payload=payload,
         )
     except Exception:  # noqa: BLE001 - LLM 不可用时降级为规则
-        return _rule_disambiguate(papers, institution)
+        return _fingerprint_prefilter(
+            _rule_disambiguate(papers, institution), professor_name, institution
+        )
 
     if not isinstance(output, DisambiguationOutput):
-        return _rule_disambiguate(papers, institution)
+        return _fingerprint_prefilter(
+            _rule_disambiguate(papers, institution), professor_name, institution
+        )
 
     verdicts = {verdict.index: verdict for verdict in output.verdicts}
     for index, paper in enumerate(papers):
@@ -124,7 +162,7 @@ def disambiguate_papers(
             paper["belongs"] = verdict.belongs
             paper["needs_review"] = verdict.needs_review
             paper["disambig_reason"] = verdict.reason
-    return papers
+    return _fingerprint_prefilter(papers, professor_name, institution)
 
 
 _SEARCH_TOOLS = {"search_by_author", "search_by_title"}

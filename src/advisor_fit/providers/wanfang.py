@@ -80,18 +80,7 @@ class WanfangProvider:
         self.app_key = app_key
         self.client = client or httpx.Client(timeout=timeout)
 
-    def search_publications(
-        self,
-        name: str,
-        *,
-        institution: str | None = None,
-        source: str = "zh",
-        limit: int = 20,
-    ) -> list[Work]:
-        collections = COLLECTION_PRESETS.get(source) or COLLECTION_PRESETS["zh"]
-        query = f"Creator:{name}"
-        if institution:
-            query = f"Creator:{name} AND OrganizationForSearch:{institution}"
+    def _post(self, collections: list[str], query: str, limit: int) -> list[dict]:
         body = {
             "collections": collections,
             "query": query,
@@ -115,7 +104,9 @@ class WanfangProvider:
             json=body,
         )
         resp.raise_for_status()
-        documents = resp.json().get("documents", []) or []
+        return resp.json().get("documents", []) or []
+
+    def _parse_works(self, documents: list[dict], source: str) -> list[Work]:
         works: list[Work] = []
         seen_titles: set[str] = set()
         for doc in documents:
@@ -152,3 +143,25 @@ class WanfangProvider:
                 )
             )
         return works
+
+    def search_publications(
+        self,
+        name: str,
+        *,
+        institution: str | None = None,
+        source: str = "zh",
+        limit: int = 20,
+    ) -> list[Work]:
+        collections = COLLECTION_PRESETS.get(source) or COLLECTION_PRESETS["zh"]
+        query = f"Creator:{name}"
+        if institution:
+            query = f"Creator:{name} AND OrganizationForSearch:{institution}"
+        return self._parse_works(self._post(collections, query, limit), source)
+
+    def search_by_title(
+        self, title: str, *, source: str = "zh", limit: int = 5
+    ) -> list[Work]:
+        """按论文标题检索（作者名查不到时的兜底）。"""
+        collections = COLLECTION_PRESETS.get(source) or COLLECTION_PRESETS["zh"]
+        query = f'Title:"{title}"'
+        return self._parse_works(self._post(collections, query, limit), source)

@@ -66,6 +66,8 @@ def _clear_professor_state() -> None:
         "prof_interests",
         "prof_homepage",
         "prof_english_name",
+        "prof_search_institution",
+        "prof_seed_titles",
         "candidate_papers",
         "_research_confirm",
         "_research_steps",
@@ -112,6 +114,8 @@ def _reset_all() -> None:
         "prof_interests",
         "prof_homepage",
         "prof_english_name",
+        "prof_search_institution",
+        "prof_seed_titles",
         "candidate_papers",
         "_research_confirm",
         "_research_steps",
@@ -158,7 +162,14 @@ def _split_terms(value: str) -> list[str]:
     return [item.strip() for item in normalized.split(",") if item.strip()]
 
 
-def _run_research(name: str, institution: str, mode: str, english_name: str) -> None:
+def _run_research(
+    name: str,
+    institution: str,
+    mode: str,
+    english_name: str,
+    search_institution: str = "",
+    seed_titles: list[str] | None = None,
+) -> None:
     """用导师研究 Agent 检索并消歧，结果与确认门控写入 session_state。"""
     provider = WanfangProvider(settings.wanfang_app_key)
     source = None if mode == "auto" else mode
@@ -169,6 +180,8 @@ def _run_research(name: str, institution: str, mode: str, english_name: str) -> 
         institution=institution or None,
         english_name=english_name or None,
         source=source,
+        search_institution=search_institution or None,
+        seed_titles=seed_titles or None,
         resume_steps=st.session_state.get("_research_steps"),
         granted_confirmations=st.session_state.get("_research_granted", []),
     )
@@ -520,6 +533,8 @@ for _key in (
     "prof_interests",
     "prof_homepage",
     "prof_english_name",
+    "prof_search_institution",
+    "prof_seed_titles",
 ):
     st.session_state.setdefault(_key, "")
 
@@ -555,6 +570,8 @@ if st.button("🔍 解析主页并自动检索"):
                 st.session_state["prof_email"] = profile.email
             if profile.declared_interests:
                 st.session_state["prof_interests"] = "、".join(profile.declared_interests)
+            if profile.publications:
+                st.session_state["prof_seed_titles"] = "\n".join(profile.publications)
             if profile.name:
                 st.session_state["_research_steps"] = None
                 st.session_state["_research_granted"] = []
@@ -578,7 +595,10 @@ identity_confirmed = st.checkbox("我已核对并确认以上信息属于目标�
 paper_read_confirmed = st.checkbox("我已阅读以上论文（可选，允许邮件提及）")
 
 st.markdown("### 🔎 智能检索候选论文")
-st.caption("Agent 先按「姓名 + 学校」查万方，再逐篇消歧；结果须你勾选确认归属。")
+st.caption(
+    "Agent 先按「姓名 + 学校」查万方，查不到再用「代表论文标题」兜底（万方 → Crossref）；"
+    "结果须你勾选确认归属。"
+)
 selected_mode = st.radio(
     "检索方式",
     ["auto", "zh", "en"],
@@ -587,6 +607,15 @@ selected_mode = st.radio(
     key="search_mode",
 )
 english_name = st.text_input("导师英文名（英文检索时使用，可选）", key="prof_english_name")
+search_institution = st.text_input(
+    "检索用机构（可选；导师有多个单位时填另一所，如西南财经大学）",
+    key="prof_search_institution",
+)
+seed_titles_text = st.text_area(
+    "代表论文标题（可选，一行一个；作者名查不到时按标题兜底检索）",
+    key="prof_seed_titles",
+)
+seed_titles = [t.strip() for t in seed_titles_text.splitlines() if t.strip()]
 search_name = english_name.strip() if selected_mode == "en" else professor_name.strip()
 
 if "candidate_papers" not in st.session_state:
@@ -605,7 +634,14 @@ def _trigger_search() -> None:
         return
     try:
         with st.spinner("Agent 正在检索与消歧…"):
-            _run_research(search_name, institution.strip(), selected_mode, english_name.strip())
+            _run_research(
+                search_name,
+                institution.strip(),
+                selected_mode,
+                english_name.strip(),
+                search_institution.strip(),
+                seed_titles,
+            )
     except Exception as exc:  # noqa: BLE001 - 检索失败降级到手动录入
         st.error(f"检索失败（不影响手动录入）：{exc}")
         st.session_state.candidate_papers = []
@@ -632,7 +668,10 @@ if st.session_state.get("_research_confirm"):
         st.session_state.pop("_research_confirm", None)
         st.session_state["_research_steps"] = None
         st.session_state["_research_granted"] = []
-        _run_research(search_name, "", selected_mode, english_name.strip())
+        _run_research(
+            search_name, "", selected_mode, english_name.strip(),
+            search_institution.strip(), seed_titles,
+        )
     if c3.button("📋 全部保留，我手动核对", use_container_width=True):
         for paper in papers:
             paper["belongs"] = True
@@ -685,6 +724,8 @@ if papers:
             label += f" · {cand['institution']}"
         if cand.get("authors"):
             label += f"〔{'、'.join(cand['authors'])}〕"
+        if cand.get("affiliation_note"):
+            label += f" · {cand['affiliation_note']}"
         cand["user_confirmed"] = st.checkbox(label, key=f"cand_paper_{index}")
         if cand.get("source_url"):
             st.markdown(f"　🔗 [查看原文]({cand['source_url']})")

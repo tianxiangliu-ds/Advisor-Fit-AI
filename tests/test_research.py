@@ -3,6 +3,7 @@
 from advisor_fit.agents.research import (
     ResearchResult,
     _institutions_conflict,
+    _investigate_affiliations,
     _merge_search_results,
     _rule_disambiguate,
     disambiguate_papers,
@@ -33,6 +34,10 @@ class FakeProvider:
     def search_publications(self, name, *, institution=None, source="zh", limit=20):
         self.calls.append((name, institution, source))
         return self.works
+
+    def search_by_title(self, title, *, source="zh", limit=5):
+        self.calls.append(("title", title, source))
+        return []
 
 
 class FakeLLM:
@@ -112,8 +117,8 @@ def test_disambiguate_papers_falls_back_to_rule_without_llm():
 
 def test_merge_search_results_dedupes_by_title():
     steps = [
-        {"tool": "search_publications", "result": {"papers": [{"title": "A"}, {"title": "B"}]}},
-        {"tool": "search_publications", "result": {"papers": [{"title": "B"}, {"title": "C"}]}},
+        {"tool": "search_by_author", "result": {"papers": [{"title": "A"}, {"title": "B"}]}},
+        {"tool": "search_by_title", "result": {"papers": [{"title": "B"}, {"title": "C"}]}},
     ]
     merged = _merge_search_results(steps)
     assert [p["title"] for p in merged] == ["A", "B", "C"]
@@ -157,7 +162,7 @@ def test_research_professor_runs_loop_and_disambiguates():
     class BothLLM:
         def __init__(self):
             self.queue = [
-                AgentDecision(action="tool", tool="search_publications", args={"name": "陆伟"}),
+                AgentDecision(action="tool", tool="search_by_author", args={"name": "陆伟"}),
                 AgentDecision(action="done", message="检索完成"),
                 DisambiguationOutput(
                     verdicts=[
@@ -186,3 +191,53 @@ def test_research_professor_seeds_institution_first():
     llm = FakeLLM([AgentDecision(action="done", message="完成")])
     research_professor(llm, provider, name="陆伟", institution="武汉大学", source="zh")
     assert provider.calls[0] == ("陆伟", "武汉大学", "zh")
+
+
+def test_research_professor_searches_alternative_institution():
+    provider = FakeProvider([FakeWork("匹配论文", institution="西南财经大学")])
+    llm = FakeLLM([AgentDecision(action="done", message="完成")])
+    research_professor(
+        llm, provider, name="林华珍", institution="武汉大学",
+        search_institution="西南财经大学", source="zh",
+    )
+    assert ("林华珍", "西南财经大学", "zh") in provider.calls
+    assert ("林华珍", "武汉大学", "zh") in provider.calls
+
+
+def test_investigate_affiliations_adds_previous_institution_papers():
+    provider = FakeProvider([FakeWork("历史论文", institution="中国地质大学（武汉）")])
+    papers = [
+        {
+            "title": "需审核论文",
+            "institution": "中国地质大学（武汉）",
+            "belongs": True,
+            "needs_review": True,
+            "disambig_reason": "机构不同",
+            "affiliation_note": "",
+        }
+    ]
+    result = _investigate_affiliations(
+        provider, "李祖超", papers, "武汉大学", "zh", None
+    )
+    titles = [p["title"] for p in result]
+    assert "历史论文" in titles
+    added = next(p for p in result if p["title"] == "历史论文")
+    assert added["affiliation_note"] == "曾任职单位：中国地质大学（武汉）"
+
+
+def test_research_without_llm_falls_back_to_titles():
+    class TitleProvider(FakeProvider):
+        def search_publications(self, name, *, institution=None, source="zh", limit=20):
+            self.calls.append((name, institution, source))
+            return []
+
+        def search_by_title(self, title, *, source="zh", limit=5):
+            self.calls.append(("title", title, source))
+            return [FakeWork(f"标题匹配:{title}", institution="西南财经大学")]
+
+    provider = TitleProvider()
+    result = research_professor(
+        NullLLM(), provider, name="林华珍", institution="武汉大学", source="zh",
+        seed_titles=["某代表论文"],
+    )
+    assert any("标题匹配" in p["title"] for p in result.papers)

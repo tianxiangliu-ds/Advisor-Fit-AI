@@ -1,9 +1,10 @@
-"""导师研究 Agent：多轮检索 + 作者消歧 + 人工确认门控。
+"""导师研究 Agent：多轮检索 + 标题兜底 + 作者消歧 + 履历调查 + 人工确认门控。
 
-检索只查万方（中文库 OpenPeriodical/OpenConference 与英文库 OpenPeriodicalEng），
-由 Harness 循环让 LLM 自主决定查询策略（是否带学校、是否切英文名）并在结果不理想时重试。
-检索到的候选论文再经「作者消歧」判断是否属于目标导师本人（同名作者问题）。
-所有结果仍标「待用户确认」，绝不自动认定归属。
+检索主库为万方（中文库 OpenPeriodical/OpenConference 与英文库 OpenPeriodicalEng）；
+当按作者名查不到时，可改用「代表论文标题」检索，万方查不到再降级 Crossref。
+检索到的候选论文经「作者消歧」判断是否属于目标导师本人（同名作者问题）；
+若候选论文机构与填写学校不同，会做一次「履历调查」（用候选机构名二次检索），
+把「曾任职单位」的证据链补齐。所有结果仍标「待用户确认」，绝不自动认定归属。
 """
 
 from __future__ import annotations
@@ -15,6 +16,7 @@ from pydantic import BaseModel
 from advisor_fit.harness.loop import run_loop
 from advisor_fit.llm.provider import NullLLM
 from advisor_fit.providers.academic import Work
+from advisor_fit.providers.crossref import CrossrefProvider
 from advisor_fit.providers.wanfang import SOURCE_LABELS
 
 
@@ -34,6 +36,7 @@ def work_to_paper(work: Work) -> dict:
         "belongs": True,
         "needs_review": False,
         "disambig_reason": "",
+        "affiliation_note": "",
     }
 
 
@@ -84,10 +87,7 @@ def _rule_disambiguate(papers: list[dict], institution: str | None) -> list[dict
 def disambiguate_papers(
     llm, papers: list[dict], *, professor_name: str, institution: str | None
 ) -> list[dict]:
-    """对候选论文做作者消歧：LLM 判定每篇是否属于该导师；无 LLM 时用机构规则兜底。
-
-    返回原地标注了 belongs / disambig_reason 的 papers 列表。
-    """
+    """对候选论文做作者消歧：LLM 判定每篇是否属于该导师；无 LLM 时用机构规则兜底。"""
     if not papers:
         return papers
 
@@ -127,11 +127,14 @@ def disambiguate_papers(
     return papers
 
 
+_SEARCH_TOOLS = {"search_by_author", "search_by_title"}
+
+
 def _merge_search_results(steps: list[dict]) -> list[dict]:
     """合并多轮检索结果，按标题去重，后搜到的在前。"""
     merged: dict[str, dict] = {}
     for step in steps:
-        if step.get("tool") != "search_publications":
+        if step.get("tool") not in _SEARCH_TOOLS:
             continue
         result = step.get("result")
         if not isinstance(result, dict):
@@ -143,11 +146,26 @@ def _merge_search_results(steps: list[dict]) -> list[dict]:
     return list(merged.values())
 
 
+def _dedupe_papers(papers: list[dict]) -> list[dict]:
+    seen: set[str] = set()
+    result: list[dict] = []
+    for paper in papers:
+        title = paper.get("title", "")
+        if title and title not in seen:
+            seen.add(title)
+            result.append(paper)
+    return result
+
+
 @dataclass
 class ResearchResult:
     papers: list[dict] = field(default_factory=list)
     needs_confirmation: str = ""
     log: list[dict] = field(default_factory=list)
+
+
+def _make_step(tool: str, args: dict, result: dict) -> dict:
+    return {"tool": tool, "args": args, "result": result}
 
 
 def research_professor(
@@ -157,51 +175,89 @@ def research_professor(
     name: str,
     institution: str | None = None,
     english_name: str | None = None,
+    search_institution: str | None = None,
+    seed_titles: list[str] | None = None,
     source: str | None = None,
-    max_steps: int = 4,
+    max_steps: int = 6,
     resume_steps: list[dict] | None = None,
     granted_confirmations: list[str] | None = None,
 ) -> ResearchResult:
-    """跑一轮导师研究：检索 →（必要时）确认门控 → 作者消歧。
+    """跑一轮导师研究：检索 →（必要时）确认门控 → 作者消歧 → 履历调查。
 
-    source 为 None 时让 LLM 自主决定中/英文库；传入 "zh"/"en" 则强制该库。
+    search_institution 用于指定与「当前单位」不同的检索机构（如导师调动前的单位）。
+    seed_titles 用于作者名查不到时按「代表论文标题」兜底检索。
     """
-    if isinstance(llm, NullLLM):
-        return _research_without_llm(provider, name, institution, source)
+    crossref = CrossrefProvider()
 
-    def search_publications(
-        name: str, institution: str | None = None, source: str = "zh"
-    ) -> dict:
+    def search_by_author(name: str, institution: str | None = None, source: str = "zh") -> dict:
         if source == "en" and english_name:
             name = english_name
         works = provider.search_publications(name, institution=institution, source=source)
         return {"count": len(works), "papers": [work_to_paper(work) for work in works]}
 
+    def search_by_title(title: str, source: str = "zh") -> dict:
+        works = provider.search_by_title(title, source=source)
+        if not works:
+            works = crossref.search_by_title(title)
+        return {"count": len(works), "papers": [work_to_paper(work) for work in works]}
+
+    if isinstance(llm, NullLLM):
+        return _research_without_llm(
+            provider, crossref, name, institution, source, search_institution, seed_titles
+        )
+
     label = SOURCE_LABELS.get(source, "万方")
     scope = f"只用 {label}" if source else "可用万方中文库（source='zh'）或英文库（source='en'）"
     task = (
         f"检索导师「{name}」的论文。学校/单位：{institution or '未提供'}。"
+        f"备选检索机构：{search_institution or '无'}。"
         f"导师英文名（可能为空）：{english_name or '无'}。"
         f"检索范围：{scope}。"
-        "已先用「姓名+学校」查过一轮（见 history）。"
-        "结果太少或无结果时，去掉学校（institution 传空字符串）重试，"
-        "或（在提供了英文名时）切到 source='en' 用英文名再查。"
+        "已先按「姓名+学校」和「代表论文标题」查过若干轮（见 history）。"
+        "作者名查不到时用 search_by_title 按论文标题兜底；"
+        "结果太少时去掉学校重试（institution 传空字符串），"
+        "或（在提供英文名时）切到 source='en' 用英文名再查。"
         "若候选论文机构与学校明显不符、疑似同名作者，请求人工确认后再继续。"
     )
-    tools = [("search_publications", "按姓名+学校检索万方候选论文", search_publications)]
+    tools = [
+        ("search_by_author", "按姓名+学校检索万方候选论文", search_by_author),
+        ("search_by_title", "按论文标题检索（万方查不到降级 Crossref）", search_by_title),
+    ]
 
-    # 预热：只要提供了学校，就先确定性带学校检索一轮，交给 LLM 判断是否需要扩搜/换库。
+    # 预热：确定性先查一轮，交给 LLM 判断是否扩搜/换库。
     seed_steps: list[dict] = []
-    if not resume_steps and institution:
+    if resume_steps is None:
         seed_source = source or "zh"
-        seed_result = search_publications(name, institution, seed_source)
-        seed_steps = [
-            {
-                "tool": "search_publications",
-                "args": {"name": name, "institution": institution, "source": seed_source},
-                "result": seed_result,
-            }
-        ]
+        primary_inst = search_institution or institution
+        if primary_inst:
+            result = search_by_author(name, primary_inst, seed_source)
+            seed_steps.append(
+                _make_step(
+                    "search_by_author",
+                    {"name": name, "institution": primary_inst, "source": seed_source},
+                    result,
+                )
+            )
+        if search_institution and institution and search_institution != institution:
+            result = search_by_author(name, institution, seed_source)
+            seed_steps.append(
+                _make_step(
+                    "search_by_author",
+                    {"name": name, "institution": institution, "source": seed_source},
+                    result,
+                )
+            )
+        author_hits = sum(
+            step["result"].get("count", 0)
+            for step in seed_steps
+            if step["tool"] == "search_by_author"
+        )
+        if author_hits < 3:
+            for title in (seed_titles or [])[:5]:
+                result = search_by_title(title, seed_source)
+                seed_steps.append(
+                    _make_step("search_by_title", {"title": title}, result)
+                )
 
     steps = run_loop(
         llm,
@@ -220,21 +276,71 @@ def research_professor(
 
     papers = _merge_search_results(steps)
     if needs_confirmation:
-        return ResearchResult(
-            papers=papers, needs_confirmation=needs_confirmation, log=steps
-        )
+        return ResearchResult(papers=papers, needs_confirmation=needs_confirmation, log=steps)
 
     disambiguate_papers(llm, papers, professor_name=name, institution=institution)
+    papers = _investigate_affiliations(
+        provider, name, papers, institution, source or "zh", english_name
+    )
     return ResearchResult(papers=papers, log=steps)
 
 
+def _investigate_affiliations(
+    provider,
+    name: str,
+    papers: list[dict],
+    primary_institution: str | None,
+    source: str,
+    english_name: str | None,
+) -> list[dict]:
+    """履历调查：对「机构与填写学校不同」的候选，用候选机构名二次检索，补「曾任职单位」证据。"""
+    alt_counts: dict[str, int] = {}
+    for paper in papers:
+        if not paper.get("needs_review"):
+            continue
+        inst = (paper.get("institution") or "").strip()
+        if inst and inst != (primary_institution or "").strip():
+            alt_counts[inst] = alt_counts.get(inst, 0) + 1
+
+    extra: list[dict] = []
+    for inst in sorted(alt_counts, key=alt_counts.get, reverse=True)[:2]:
+        try:
+            works = provider.search_publications(
+                english_name or name, institution=inst, source=source
+            )
+        except Exception:  # noqa: BLE001 - 履历调查失败不阻断主流程
+            continue
+        for work in works:
+            paper = work_to_paper(work)
+            paper["affiliation_note"] = f"曾任职单位：{inst}"
+            paper["needs_review"] = False
+            extra.append(paper)
+
+    return _dedupe_papers([*papers, *extra])
+
+
 def _research_without_llm(
-    provider, name: str, institution: str | None, source: str | None
+    provider,
+    crossref: CrossrefProvider,
+    name: str,
+    institution: str | None,
+    source: str | None,
+    search_institution: str | None,
+    seed_titles: list[str] | None,
 ) -> ResearchResult:
-    """无 LLM 时：确定性检索 + 机构规则消歧。"""
-    works = provider.search_publications(
-        name, institution=institution, source=source or "zh"
-    )
-    papers = [work_to_paper(work) for work in works]
+    """无 LLM 时：确定性检索（机构 → 备选机构 → 标题兜底）+ 机构规则消歧。"""
+    papers: list[dict] = []
+    for inst in (search_institution, institution):
+        if not inst:
+            continue
+        works = provider.search_publications(name, institution=inst, source=source or "zh")
+        papers.extend(work_to_paper(work) for work in works)
+    if len(papers) < 3:
+        for title in (seed_titles or [])[:5]:
+            works = provider.search_by_title(title, source=source or "zh")
+            if not works:
+                works = crossref.search_by_title(title)
+            papers.extend(work_to_paper(work) for work in works)
+    papers = _dedupe_papers(papers)
     _rule_disambiguate(papers, institution)
     return ResearchResult(papers=papers)

@@ -82,7 +82,11 @@ LLM 配置是可选的，支持多供应商：复制 `.env.example` 为 `.env`�
 .\.venv\Scripts\python.exe -m pytest -q
 .\.venv\Scripts\python.exe -m ruff check src tests scripts app.py
 .\.venv\Scripts\python.exe scripts\run_evals.py
+# 消歧评测（需 LLM_API_KEY；--rule 可跑机构规则基线对比）
+.\.venv\Scripts\python.exe scripts\run_disambiguation_evals.py
 ```
+
+消歧评测数据在 `evals/disambiguation_golden.jsonl`：每个导师配一组「应命中/应排除」候选论文，量化消歧 precision/recall/F1。用 `scripts/fetch_golden_candidates.py` 抓取真实候选后，按你的领域知识补充标注即可扩充（当前为起始集，约 10 位导师、150 篇候选）。
 
 ## 数据与隐私
 

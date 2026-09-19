@@ -29,7 +29,7 @@ class _LinkExtractor(HTMLParser):
         if tag != "a":
             return
         attrs = dict(attrs)
-        href = attrs.get("href", "").strip()
+        href = (attrs.get("href") or "").strip()
         text = ""
         self._current = [href, text]
 

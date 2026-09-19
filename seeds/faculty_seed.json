@@ -1,0 +1,20 @@
+{
+  "universities": [
+    {"name": "清华大学", "domain": "tsinghua.edu.cn", "note": "各院系师资页多为 JS 渲染，需 Playwright"},
+    {"name": "北京大学", "domain": "pku.edu.cn", "note": "各院系师资页多为 JS 渲染"},
+    {"name": "浙江大学", "domain": "zju.edu.cn"},
+    {"name": "上海交通大学", "domain": "sjtu.edu.cn"},
+    {"name": "复旦大学", "domain": "fudan.edu.cn"},
+    {"name": "南京大学", "domain": "nju.edu.cn"},
+    {"name": "中国科学技术大学", "domain": "ustc.edu.cn"},
+    {"name": "华中科技大学", "domain": "hust.edu.cn"},
+    {"name": "武汉大学", "domain": "whu.edu.cn"},
+    {"name": "中山大学", "domain": "sysu.edu.cn"}
+  ],
+  "colleges": [
+    {"university": "武汉大学", "college": "信息管理学院", "list_url": "https://sim.whu.edu.cn/szdw/zzjs/zmjs/qb.htm"},
+    {"university": "武汉大学", "college": "计算机学院", "list_url": "https://cs.whu.edu.cn/szdw/zrjs.htm"},
+    {"university": "华中科技大学", "college": "计算机科学与技术学院", "list_url": "https://cs.hust.edu.cn/szdw/jsml/axmpyszmlb.htm"},
+    {"university": "北京大学", "college": "信息科学技术学院", "list_url": "https://eecs.pku.edu.cn/szdw/jj.htm"}
+  ]
+}

@@ -64,6 +64,24 @@ LLM 配置是可选的，支持多供应商：复制 `.env.example` 为 `.env`�
 
 > 注意：部分高校导师页是 JS 动态渲染，静态抓取可能取不到内容；此时请手动填写。
 
+## 导师库建库（批量采集高校导师）
+
+从高校官网批量采集导师档案，写入本地 `data/faculty.db`，用于后续「导师指纹」建库与检索去重。
+
+```powershell
+# 安装可选依赖（渲染 JS 页面）
+uv sync --group crawl
+.\.venv\Scripts\python.exe -m playwright install chromium
+
+# 静态抓取（数据源 seeds/faculty_seed.json）
+.\.venv\Scripts\python.exe scripts\crawl_faculty.py
+
+# JS 渲染抓取（高校师资列表多为 Vue/React 动态加载，需 Playwright）
+.\.venv\Scripts\python.exe scripts\crawl_faculty.py --js --limit 20
+```
+
+每条记录含：姓名、学校、学院、职称、主页链接、邮箱、研究领域、研究方向、代表论文。数据源在 `seeds/faculty_seed.json`（top-10 高校 + 已收录学院）；扩充时先在其学院官网找到「师资队伍/教师名录」入口页 URL 加入即可。
+
 ## 第一次测试建议
 
 准备一份可提取文字的测试 CV，以及一位导师的以下资料：

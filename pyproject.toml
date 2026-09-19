@@ -21,6 +21,9 @@ dev = [
 pdf = [
     "docling>=2",
 ]
+crawl = [
+    "playwright>=1.45",
+]
 
 [build-system]
 requires = ["hatchling"]

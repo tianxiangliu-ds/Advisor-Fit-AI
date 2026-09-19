@@ -13,6 +13,7 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+import time
 from pathlib import Path
 
 ROOT = Path(__file__).parent.parent
@@ -35,6 +36,7 @@ def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--js", action="store_true", help="用 Playwright 渲染 JS 页面")
     parser.add_argument("--limit", type=int, default=200)
+    parser.add_argument("--delay", type=float, default=0.4, help="每次请求间隔秒数（礼貌限速）")
     args = parser.parse_args()
 
     llm = build_llm()
@@ -62,6 +64,7 @@ def main() -> int:
                 saved = 0
                 for link in faculty[: args.limit]:
                     try:
+                        time.sleep(args.delay)
                         page_html = fetch_html(link.href)
                         record = parse_faculty_page(
                             html_to_text(page_html), llm, name=link.name,
@@ -72,7 +75,7 @@ def main() -> int:
                         saved += 1
                     except Exception as exc:  # noqa: BLE001
                         print(f"   跳过 {link.name}: {type(exc).__name__}")
-                print(f"  采得 {saved}/{len(faculty[: args.limit])} 位")
+                print(f"  采得 {saved}/{len(faculty[: args.limit])} 位", flush=True)
             except Exception as exc:  # noqa: BLE001
                 print(f"  {college['college']} 失败: {type(exc).__name__}: {exc}")
     else:

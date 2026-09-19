@@ -409,19 +409,72 @@ st.set_page_config(page_title="导师双选 AI 助手", layout="wide", page_icon
 st.markdown(
     """
     <style>
-    .block-container { padding-top: 2rem; padding-bottom: 4rem; max-width: 1100px; }
-    h1 { color: #1f3a5f; letter-spacing: -0.02em; }
-    h2, h3 { color: #1f3a5f; border-bottom: 2px solid #e5e9f0; padding-bottom: 0.35rem; }
-    .hero {
-        background: linear-gradient(135deg, #2b6cb0 0%, #3b82c4 100%);
-        color: #fff; border-radius: 14px; padding: 1.6rem 1.8rem; margin-bottom: 1.4rem;
+    /* ===== 全局背景与文字 ===== */
+    .stApp { background: #f5f7fa; }
+    .block-container { padding-top: 1.8rem; padding-bottom: 5rem; max-width: 1120px; }
+    html, body, [class*="css"] { color: #1f2937; }
+
+    /* ===== 字体层级 ===== */
+    h1 { color: #0f172a; font-weight: 700; letter-spacing: -0.02em; font-size: 1.9rem; }
+    h2 { color: #0f172a; font-weight: 650; font-size: 1.35rem; margin-top: 1.4rem; }
+    h3 { color: #1f2937; font-weight: 600; font-size: 1.1rem; }
+    p, label, [data-testid="stMarkdownContainer"] p { color: #374151; }
+    [data-testid="stCaptionContainer"], .stCaption { color: #64748b; font-size: 0.82rem; }
+
+    /* ===== 卡片 / 模块圆角与阴影 ===== */
+    div[data-testid="stExpander"] {
+        border: 1px solid #e2e8f0; border-radius: 12px;
+        box-shadow: 0 1px 2px rgba(15,23,42,0.04); background: #fff;
     }
-    .hero h1 { color: #fff; margin: 0 0 0.3rem 0; border: none; }
-    .hero p { color: #dbeafe; margin: 0; font-size: 0.98rem; }
-    [data-testid="stSidebar"] { background: #f8fafc; }
-    div[data-testid="stExpander"] { border: 1px solid #e5e9f0; border-radius: 10px; }
-    .stButton > button { border-radius: 8px; }
+    div[data-testid="stExpander"] summary {
+        font-weight: 600; color: #1f2937;
+    }
+    div[data-testid="stVerticalBlockBorderWrapper"],
+    div[data-testid="stVerticalBlockBorderWrapper"] > div {
+        border-radius: 12px;
+    }
+
+    /* ===== 按钮 ===== */
+    .stButton > button {
+        border-radius: 10px; border: 1px solid #dbe2ea; font-weight: 500;
+        transition: all 0.15s ease; box-shadow: 0 1px 2px rgba(15,23,42,0.05);
+    }
+    .stButton > button:hover { border-color: #2563eb; color: #2563eb; box-shadow: 0 2px 6px rgba(37,99,235,0.12); }
+    .stButton > button[kind="primary"] {
+        background: #2563eb; border-color: #2563eb; color: #fff;
+    }
+    .stButton > button[kind="primary"]:hover { background: #1d4ed8; border-color: #1d4ed8; color: #fff; }
+
+    /* ===== 输入框 ===== */
+    .stTextInput input, .stTextArea textarea, .stNumberInput input {
+        border-radius: 10px; border: 1px solid #dbe2ea; background: #fff;
+    }
+    .stTextInput input:focus, .stTextArea textarea:focus {
+        border-color: #2563eb; box-shadow: 0 0 0 3px rgba(37,99,235,0.12);
+    }
+    [data-testid="stSelectbox"] > div > div { border-radius: 10px; }
+
+    /* ===== 侧栏 ===== */
+    [data-testid="stSidebar"] {
+        background: #ffffff; border-right: 1px solid #e2e8f0;
+    }
     [data-testid="stSidebar"] .stButton > button { width: 100%; }
+
+    /* ===== Tabs ===== */
+    .stTabs [data-baseweb="tab-list"] { gap: 0.4rem; border-bottom: 1px solid #e2e8f0; }
+    .stTabs [data-baseweb="tab"] {
+        border-radius: 8px 8px 0 0; padding: 0.6rem 1rem; font-weight: 500; color: #64748b;
+    }
+    .stTabs [aria-selected="true"] { color: #2563eb; font-weight: 600; }
+
+    /* ===== Hero ===== */
+    .hero {
+        background: linear-gradient(135deg, #1e40af 0%, #2563eb 60%, #3b82f6 100%);
+        color: #fff; border-radius: 16px; padding: 1.7rem 2rem; margin-bottom: 1.6rem;
+        box-shadow: 0 6px 20px rgba(30,64,175,0.22);
+    }
+    .hero h1 { color: #fff; margin: 0 0 0.35rem 0; border: none; font-size: 1.7rem; }
+    .hero p { color: #dbeafe; margin: 0; font-size: 0.95rem; }
     </style>
     """,
     unsafe_allow_html=True,
@@ -429,7 +482,7 @@ st.markdown(
 st.markdown(
     """
     <div class="hero">
-      <h1>🎓 导师双选 AI 助手</h1>
+      <h1>导师双选 AI 助手</h1>
       <p>上传简历 → 检索并核验导师论文 → 生成证据可溯的匹配报告与个性化套磁邮件</p>
     </div>
     """,

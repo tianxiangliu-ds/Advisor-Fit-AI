@@ -30,3 +30,6 @@ venv/
 .idea/
 .vscode/
 .DS_Store
+
+# UI 参考设计截图（用户本地素材）
+UI_design/

@@ -1,6 +1,9 @@
 """LLM 结构化 CV 抽取测试。"""
 
 from advisor_fit.ingest.cv_llm import (
+    LlmEducation,
+    LlmProject,
+    LlmPublication,
     LlmStudentFact,
     StudentProfileOutput,
     build_student_profile_llm,
@@ -64,3 +67,20 @@ def test_llm_cv_extracts_name():
 
     profile = build_student_profile_llm("张三\nPython 硕士", NameLLM())
     assert profile.name == "张三"
+
+
+def test_llm_cv_extracts_structured_experience():
+    class RichLLM:
+        def generate(self, *, schema, instructions, payload):
+            return StudentProfileOutput(
+                name="张三",
+                education=[LlmEducation(degree="硕士", institution="武汉大学", major="信息管理")],
+                projects=[LlmProject(name="政策文本抽取", description="基于大模型")],
+                publications=[LlmPublication(title="某论文", venue="某期刊", year="2025")],
+            )
+
+    profile = build_student_profile_llm("张三\n武汉大学硕士", RichLLM())
+    assert len(profile.education) == 1
+    assert profile.education[0].institution == "武汉大学"
+    assert profile.projects[0].name == "政策文本抽取"
+    assert profile.publications[0].title == "某论文"

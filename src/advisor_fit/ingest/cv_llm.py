@@ -1,26 +1,29 @@
-"""LLM 结构化 CV 抽取：把简历文本变成可核验的学生画像候选事实。
-
-规则：
-- 只抽取文本中明确写出的内容，不得推断、补全或猜测；
-- 抽取结果全部 user_confirmed=False，确认前不得进入邮件草稿。
-"""
+"""LLM 结构化 CV 抽取：把简历文本变成可核验的学生画像（事实 + 教育/项目/论文）。"""
 
 from __future__ import annotations
 
 from pydantic import BaseModel
 
 from advisor_fit.models.common import FactStatus
-from advisor_fit.models.student import StudentFact, StudentProfile
+from advisor_fit.models.student import (
+    Education,
+    Project,
+    Publication,
+    StudentFact,
+    StudentProfile,
+)
 
 # 与 UI 的 Selectbox 选项保持一致
 _ALLOWED_FIELDS = ("skill", "degree", "institution", "interest", "project", "publication")
 
 _EXTRACT_INSTRUCTIONS = (
-    "从简历文本中抽取学生的可核验事实与姓名。"
-    "name 填学生的真实姓名（通常在简历顶部）；没有明确写出则留空。"
-    "只抽取文本中明确写出的内容，不得推断、补全或猜测；没有明确证据的内容不要输出。"
-    f"field 只能是以下之一：{', '.join(_ALLOWED_FIELDS)}；"
-    "value 填简历中的原文或最简表述。"
+    "从简历文本中抽取学生的姓名、事实与结构化经历。"
+    "name 填学生真实姓名（通常在简历顶部）；没有明确写出则留空。"
+    "只抽取文本中明确写出的内容，不得推断、补全或猜测。"
+    f"facts 的 field 只能是以下之一：{', '.join(_ALLOWED_FIELDS)}；value 填原文或最简表述。"
+    "education 填教育经历（学历/学校/专业/起止时间，逐年一条）；"
+    "projects 填项目/科研经历（名称/简述/角色）；"
+    "publications 填论文或专利（标题/出处/年份）。"
 )
 
 
@@ -29,15 +32,38 @@ class LlmStudentFact(BaseModel):
     value: str
 
 
+class LlmEducation(BaseModel):
+    degree: str = ""
+    institution: str = ""
+    major: str = ""
+    start_year: str = ""
+    end_year: str = ""
+
+
+class LlmProject(BaseModel):
+    name: str = ""
+    description: str = ""
+    role: str = ""
+
+
+class LlmPublication(BaseModel):
+    title: str = ""
+    venue: str = ""
+    year: str = ""
+
+
 class StudentProfileOutput(BaseModel):
     name: str = ""
     facts: list[LlmStudentFact] = []
+    education: list[LlmEducation] = []
+    projects: list[LlmProject] = []
+    publications: list[LlmPublication] = []
 
 
 def build_student_profile_llm(
     text: str, llm, *, student_id: str = "student_llm"
 ) -> StudentProfile:
-    """用 LLM 从简历文本抽取候选事实；空文本直接返回空画像。"""
+    """用 LLM 从简历文本抽取结构化画像；空文本直接返回空画像。"""
     if not text.strip():
         return StudentProfile(student_id=student_id, facts=[])
 
@@ -46,10 +72,12 @@ def build_student_profile_llm(
         instructions=_EXTRACT_INSTRUCTIONS,
         payload={"cv_text": text},
     )
-    name = output.name.strip() if isinstance(output, StudentProfileOutput) else ""
+    if not isinstance(output, StudentProfileOutput):
+        output = StudentProfileOutput()
+
     facts: list[StudentFact] = []
     seen: set[tuple[str, str]] = set()
-    for index, item in enumerate(output.facts if isinstance(output, StudentProfileOutput) else []):
+    for index, item in enumerate(output.facts):
         field = item.field.strip()
         value = item.value.strip()
         if field not in _ALLOWED_FIELDS or not value:
@@ -68,4 +96,30 @@ def build_student_profile_llm(
                 user_confirmed=False,
             )
         )
-    return StudentProfile(student_id=student_id, name=name or None, facts=facts)
+
+    return StudentProfile(
+        student_id=student_id,
+        name=output.name.strip() or None,
+        facts=facts,
+        education=[
+            Education(
+                degree=e.degree.strip(),
+                institution=e.institution.strip(),
+                major=e.major.strip(),
+                start_year=e.start_year.strip(),
+                end_year=e.end_year.strip(),
+            )
+            for e in output.education
+            if e.institution.strip() or e.degree.strip()
+        ],
+        projects=[
+            Project(name=p.name.strip(), description=p.description.strip(), role=p.role.strip())
+            for p in output.projects
+            if p.name.strip() or p.description.strip()
+        ],
+        publications=[
+            Publication(title=p.title.strip(), venue=p.venue.strip(), year=p.year.strip())
+            for p in output.publications
+            if p.title.strip()
+        ],
+    )

@@ -27,10 +27,35 @@ class StudentFact(BaseModel):
         return self
 
 
+class Education(BaseModel):
+    """结构化教育经历（用于更精准的匹配与邮件）。"""
+
+    degree: str = ""        # 学历，如「硕士」
+    institution: str = ""   # 学校
+    major: str = ""         # 专业/方向
+    start_year: str = ""    # 起（允许「2022」或「2022.9」）
+    end_year: str = ""      # 止
+
+
+class Project(BaseModel):
+    name: str = ""
+    description: str = ""
+    role: str = ""
+
+
+class Publication(BaseModel):
+    title: str = ""
+    venue: str = ""
+    year: str = ""
+
+
 class StudentProfile(BaseModel):
     student_id: str
     name: str | None = None
     facts: list[StudentFact] = []
+    education: list[Education] = []
+    projects: list[Project] = []
+    publications: list[Publication] = []
 
     def draftable_facts(self) -> list[StudentFact]:
         """返回可以进入邮件草稿的、已确认的 FACT 事实。"""

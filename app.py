@@ -314,13 +314,21 @@ def _render_report(result) -> None:
 
 def _render_draft(result) -> None:
     draft = result.draft
-    st.write(f"主题：{draft.subject or '（无）'}")
+    subject = st.text_input("邮件主题", value=draft.subject or "", key="draft_subject")
     body = "\n".join(sentence.text for sentence in draft.sentences)
-    st.code(body, language=None)
+    edited_body = st.text_area("邮件正文（可直接编辑）", value=body, height=280, key="draft_body")
     if draft.warnings:
         st.info("；".join(draft.warnings))
     if not result.draft_validation.ok:
         st.warning("邮件中仍有未通过校验的句子，请不要直接发送。")
+    st.caption("完整邮件（含主题）可直接复制：")
+    st.code(f"主题：{subject}\n\n{edited_body}", language=None)
+    st.download_button(
+        "下载邮件文本",
+        f"主题：{subject}\n\n{edited_body}".encode(),
+        file_name="联系邮件.txt",
+        mime="text/plain",
+    )
 
 
 def _load_run_view(repo, run_id):
@@ -364,6 +372,7 @@ def _compare_runs(repo) -> list[dict]:
         match = MatchReport(**match_data)
         rows.append(
             {
+                "run_id": run["id"],
                 "记录": run.get("name") or "—",
                 "导师": professor.name.value or professor.professor_id,
                 "研究匹配": match.research_fit.value,
@@ -375,20 +384,36 @@ def _compare_runs(repo) -> list[dict]:
     return rows
 
 
-st.set_page_config(page_title="导师双选 AI 助手", layout="wide")
+st.set_page_config(page_title="导师双选 AI 助手", layout="wide", page_icon="🎓")
 st.markdown(
     """
     <style>
-    .block-container { padding-top: 1.5rem; }
-    h1 { color: #1f3a5f; }
-    h2, h3 { color: #1f3a5f; border-bottom: 2px solid #e3e8f0; padding-bottom: 0.3rem; }
-    [data-testid="stSidebar"] { background: #f7f9fc; }
+    .block-container { padding-top: 2rem; padding-bottom: 4rem; max-width: 1100px; }
+    h1 { color: #1f3a5f; letter-spacing: -0.02em; }
+    h2, h3 { color: #1f3a5f; border-bottom: 2px solid #e5e9f0; padding-bottom: 0.35rem; }
+    .hero {
+        background: linear-gradient(135deg, #2b6cb0 0%, #3b82c4 100%);
+        color: #fff; border-radius: 14px; padding: 1.6rem 1.8rem; margin-bottom: 1.4rem;
+    }
+    .hero h1 { color: #fff; margin: 0 0 0.3rem 0; border: none; }
+    .hero p { color: #dbeafe; margin: 0; font-size: 0.98rem; }
+    [data-testid="stSidebar"] { background: #f8fafc; }
+    div[data-testid="stExpander"] { border: 1px solid #e5e9f0; border-radius: 10px; }
+    .stButton > button { border-radius: 8px; }
+    [data-testid="stSidebar"] .stButton > button { width: 100%; }
     </style>
     """,
     unsafe_allow_html=True,
 )
-st.title("导师双选 AI 助手")
-st.caption("上传简历 → 检索并核验导师 → 生成证据可溯的匹配报告与个性化邮件")
+st.markdown(
+    """
+    <div class="hero">
+      <h1>🎓 导师双选 AI 助手</h1>
+      <p>上传简历 → 检索并核验导师论文 → 生成证据可溯的匹配报告与个性化套磁邮件</p>
+    </div>
+    """,
+    unsafe_allow_html=True,
+)
 
 for key, default in (
     ("student", None),
@@ -434,7 +459,44 @@ if st.session_state.get("show_compare"):
     st.caption("已生成报告的历史导师横向对比；再次点击侧栏「📊 对比历史导师」可收起。")
     rows = _compare_runs(st.session_state.repo)
     if rows:
-        st.dataframe(rows, hide_index=True, use_container_width=True)
+        _REC_ORDER = {
+            "WORTH_CONTACTING": 0, "LEARN_MORE": 1, "LOW_PRIORITY": 2, "INSUFFICIENT_EVIDENCE": 3,
+        }
+        _FIT_ORDER = {"STRONG": 0, "PARTIAL": 1, "WEAK": 2, "UNKNOWN": 3}
+        sort_key = st.selectbox(
+            "排序依据", ["建议优先", "匹配优先", "名称"], key="compare_sort"
+        )
+        if sort_key == "建议优先":
+            rows = sorted(rows, key=lambda r: _REC_ORDER.get(r["建议"], 9))
+        elif sort_key == "匹配优先":
+            rows = sorted(rows, key=lambda r: _FIT_ORDER.get(r["研究匹配"], 9))
+        else:
+            rows = sorted(rows, key=lambda r: r["记录"])
+        rec_filter = st.multiselect(
+            "按建议筛选",
+            list(_REC_ORDER),
+            format_func=lambda k: _REC_BADGES.get(k, k),
+            key="compare_rec_filter",
+        )
+        if rec_filter:
+            rows = [r for r in rows if r["建议"] in rec_filter]
+        display = [
+            {k: v for k, v in r.items() if k != "run_id"}
+            for r in rows
+        ]
+        st.dataframe(display, hide_index=True, use_container_width=True)
+        selected = st.selectbox(
+            "选择一位导师查看完整报告",
+            [f"{r['记录']}" for r in rows],
+            key="compare_detail",
+        )
+        if st.button("查看所选导师报告", key="compare_open"):
+            match = next(r for r in rows if r["记录"] == selected)
+            view = _load_run_view(st.session_state.repo, match["run_id"])
+            if view is not None:
+                st.session_state.viewed_run = view
+                st.session_state.show_compare = False
+                st.rerun()
     else:
         st.info("暂无可对比的历史记录（先生成至少一次报告）。")
     if st.button("收起对比"):

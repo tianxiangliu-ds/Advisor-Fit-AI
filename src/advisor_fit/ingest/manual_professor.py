@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+from datetime import UTC, datetime
 from urllib.parse import urlparse
 
 from pydantic import BaseModel, Field, field_validator
@@ -215,6 +216,7 @@ def build_manual_materials(
                 source_url=paper.source_url,
                 title=paper.title,
                 published_date=str(paper.year) if paper.year else None,
+                retrieved_at=datetime.now(UTC).isoformat(),
                 evidence_text=paper.abstract,
                 author_resolution_status="CONFIRMED",
                 source_tier=2,

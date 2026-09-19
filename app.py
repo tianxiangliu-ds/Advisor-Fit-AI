@@ -306,6 +306,8 @@ def _render_report(result) -> None:
     st.subheader("证据来源")
     for evidence in result.evidences:
         label = evidence.title or evidence.id
+        if evidence.published_date:
+            label += f"（{evidence.published_date}）"
         if evidence.source_url:
             st.markdown(f"- [{evidence.source_type}] [{label}]({evidence.source_url})")
         else:
@@ -903,18 +905,24 @@ if st.button("生成报告与邮件草稿", type="primary", disabled=not can_gen
 
 result = st.session_state.result
 if result is not None:
-    st.header("④ 匹配报告")
-    _render_report(result)
-    st.header("⑤ 邮件、导出与删除")
-    _render_draft(result)
-    st.download_button("下载 Markdown", export_markdown(result), file_name="advisor-report.md")
-    st.download_button("下载 JSON", export_json(result), file_name="advisor-report.json")
-    st.download_button(
-        "下载 Word",
-        export_docx(result),
-        file_name="advisor-report.docx",
-        mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-    )
-    if st.button("🗑 清空全部数据", type="secondary"):
-        _reset_all()
-        st.rerun()
+    st.header("④ 报告、邮件与导出")
+    tab_report, tab_draft, tab_export = st.tabs(["📊 匹配报告", "✉️ 邮件草稿", "⬇️ 导出与清空"])
+    with tab_report:
+        _render_report(result)
+    with tab_draft:
+        _render_draft(result)
+    with tab_export:
+        st.download_button(
+            "下载 Markdown", export_markdown(result), file_name="advisor-report.md"
+        )
+        st.download_button("下载 JSON", export_json(result), file_name="advisor-report.json")
+        st.download_button(
+            "下载 Word",
+            export_docx(result),
+            file_name="advisor-report.docx",
+            mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        )
+        st.divider()
+        if st.button("🗑 清空全部数据", type="secondary"):
+            _reset_all()
+            st.rerun()

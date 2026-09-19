@@ -71,6 +71,14 @@ def test_faculty_repo_upsert_dedupes_by_id(tmp_path):
     assert repo.list_by_university("武汉大学")[0].title == "教授"
 
 
+def test_faculty_repo_lookup_by_name_and_university(tmp_path):
+    repo = FacultyRepository(tmp_path / "faculty.db")
+    repo.upsert(_record())
+    assert len(repo.lookup("蔡朝晖", "武汉大学")) == 1
+    assert repo.lookup("蔡朝晖", "北京大学") == []
+    assert len(repo.lookup("不存在", "武汉大学")) == 0
+
+
 def test_parse_faculty_page_falls_back_to_email_regex():
     text = "蔡朝晖 副教授\n研究方向：数字媒体\n邮箱 zhcai@whu.edu.cn"
     record = parse_faculty_page(

@@ -68,6 +68,8 @@ def _clear_professor_state() -> None:
         "prof_english_name",
         "prof_search_institution",
         "prof_seed_titles",
+        "_faculty_directions",
+        "_faculty_seed_titles",
         "candidate_papers",
         "_research_confirm",
         "_research_steps",
@@ -116,6 +118,8 @@ def _reset_all() -> None:
         "prof_english_name",
         "prof_search_institution",
         "prof_seed_titles",
+        "_faculty_directions",
+        "_faculty_seed_titles",
         "candidate_papers",
         "_research_confirm",
         "_research_steps",
@@ -169,6 +173,7 @@ def _run_research(
     english_name: str,
     search_institution: str = "",
     seed_titles: list[str] | None = None,
+    known_directions: list[str] | None = None,
 ) -> None:
     """用导师研究 Agent 检索并消歧，结果与确认门控写入 session_state。"""
     provider = WanfangProvider(settings.wanfang_app_key)
@@ -182,6 +187,7 @@ def _run_research(
         source=source,
         search_institution=search_institution or None,
         seed_titles=seed_titles or None,
+        known_directions=known_directions or None,
         resume_steps=st.session_state.get("_research_steps"),
         granted_confirmations=st.session_state.get("_research_granted", []),
     )
@@ -194,6 +200,19 @@ def _run_research(
         st.session_state["_research_steps"] = None
         st.session_state["_research_granted"] = []
         st.session_state.candidate_papers = result.papers
+
+
+def _faculty_repo():
+    from advisor_fit.storage.faculty_repo import FacultyRepository
+
+    return FacultyRepository(settings.data_dir / "faculty.db")
+
+
+def _lookup_faculty(name: str, institution: str) -> list:
+    try:
+        return _faculty_repo().lookup(name, institution or None)
+    except Exception:  # noqa: BLE001 - 导师库缺失/损坏不影响检索
+        return []
 
 
 def _set_all_candidates(confirmed: bool, *, matching_only: bool = False) -> None:
@@ -658,6 +677,33 @@ with right:
 identity_confirmed = st.checkbox("我已核对并确认以上信息属于目标导师")
 paper_read_confirmed = st.checkbox("我已阅读以上论文（可选，允许邮件提及）")
 
+if st.button("🔍 从导师库填充", help="在已采集的高校导师库中按姓名+学校查找并自动填充"):
+    matches = _lookup_faculty(professor_name, institution)
+    if not matches:
+        st.info("导师库中未找到该导师（可能其学院尚未采集，或姓名/学校不匹配）。")
+    else:
+        best = matches[0]
+        if best.college:
+            st.session_state["prof_department"] = best.college
+        if best.title:
+            st.session_state["prof_title"] = best.title
+        if best.email:
+            st.session_state["prof_email"] = best.email
+        if best.homepage_url:
+            st.session_state["prof_homepage"] = best.homepage_url
+        directions = best.research_directions or best.research_areas
+        if directions:
+            st.session_state["prof_interests"] = "、".join(directions)
+        if best.publications:
+            st.session_state["prof_seed_titles"] = "\n".join(best.publications)
+        st.session_state["_faculty_directions"] = directions
+        st.session_state["_faculty_seed_titles"] = best.publications
+        note = f"已从导师库填充「{best.name} · {best.university} · {best.college}」"
+        if len(matches) > 1:
+            note += f"（共 {len(matches)} 条同名匹配，已取第一条，请核对）"
+        st.success(note)
+        st.rerun()
+
 st.markdown("### 🔎 智能检索候选论文")
 st.caption(
     "Agent 先按「姓名 + 学校」查万方，查不到再用「代表论文标题」兜底（万方 → Crossref）；"
@@ -680,6 +726,10 @@ seed_titles_text = st.text_area(
     key="prof_seed_titles",
 )
 seed_titles = [t.strip() for t in seed_titles_text.splitlines() if t.strip()]
+faculty_seed = st.session_state.get("_faculty_seed_titles", [])
+if faculty_seed:
+    seed_titles = list(dict.fromkeys([*faculty_seed, *seed_titles]))
+faculty_directions = st.session_state.get("_faculty_directions", [])
 search_name = english_name.strip() if selected_mode == "en" else professor_name.strip()
 
 if "candidate_papers" not in st.session_state:
@@ -705,6 +755,7 @@ def _trigger_search() -> None:
                 english_name.strip(),
                 search_institution.strip(),
                 seed_titles,
+                faculty_directions,
             )
     except Exception as exc:  # noqa: BLE001 - 检索失败降级到手动录入
         st.error(f"检索失败（不影响手动录入）：{exc}")
@@ -734,7 +785,7 @@ if st.session_state.get("_research_confirm"):
         st.session_state["_research_granted"] = []
         _run_research(
             search_name, "", selected_mode, english_name.strip(),
-            search_institution.strip(), seed_titles,
+            search_institution.strip(), seed_titles, faculty_directions,
         )
     if c3.button("📋 全部保留，我手动核对", use_container_width=True):
         for paper in papers:

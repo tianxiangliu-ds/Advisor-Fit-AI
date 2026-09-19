@@ -90,6 +90,19 @@ class FacultyRepository:
             row = conn.execute("SELECT COUNT(*) AS n FROM faculty").fetchone()
         return int(row["n"])
 
+    def lookup(self, name: str, university: str | None = None) -> list[FacultyRecord]:
+        """按姓名精确、学校（可选，双向子串）查询导师库。"""
+        with closing(self._connect()) as conn:
+            rows = conn.execute("SELECT * FROM faculty WHERE name = ?", (name.strip(),)).fetchall()
+        records = [self._row_to_record(dict(row)) for row in rows]
+        if university:
+            u = university.strip()
+            records = [
+                r for r in records
+                if not u or u in r.university or r.university in u
+            ]
+        return records
+
     def list_by_university(self, university: str) -> list[FacultyRecord]:
         with closing(self._connect()) as conn:
             rows = conn.execute(

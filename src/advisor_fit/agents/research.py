@@ -55,6 +55,7 @@ class DisambiguationOutput(BaseModel):
 _DISAMBIG_INSTRUCTIONS = (
     "判断每篇候选论文是否属于目标导师本人（而非同名作者）。"
     "依据：论文机构是否匹配、合作作者是否稳定、研究主题是否连续。"
+    "若 payload 提供了该导师的 known_directions（已知研究方向），优先用它判断主题连续性。"
     "belongs 取 true 表示属于该导师，false 表示同名他人。"
     "若论文机构与目标学校明显不同，且研究领域/主题也明显不同（如医学 vs 计算机），"
     "应 belongs=false，不要因为姓名相同就保留。"
@@ -119,14 +120,23 @@ def _fingerprint_prefilter(
 
 
 def disambiguate_papers(
-    llm, papers: list[dict], *, professor_name: str, institution: str | None
+    llm,
+    papers: list[dict],
+    *,
+    professor_name: str,
+    institution: str | None,
+    known_directions: list[str] | None = None,
 ) -> list[dict]:
     """对候选论文做作者消歧：LLM 判定每篇是否属于该导师；无 LLM 时用机构规则兜底。"""
     if not papers:
         return papers
 
     payload = {
-        "professor": {"name": professor_name, "institution": institution or ""},
+        "professor": {
+            "name": professor_name,
+            "institution": institution or "",
+            "known_directions": known_directions or [],
+        },
         "papers": [
             {
                 "index": index,
@@ -215,6 +225,7 @@ def research_professor(
     english_name: str | None = None,
     search_institution: str | None = None,
     seed_titles: list[str] | None = None,
+    known_directions: list[str] | None = None,
     source: str | None = None,
     max_steps: int = 6,
     resume_steps: list[dict] | None = None,
@@ -316,7 +327,10 @@ def research_professor(
     if needs_confirmation:
         return ResearchResult(papers=papers, needs_confirmation=needs_confirmation, log=steps)
 
-    disambiguate_papers(llm, papers, professor_name=name, institution=institution)
+    disambiguate_papers(
+        llm, papers, professor_name=name, institution=institution,
+        known_directions=known_directions,
+    )
     papers = _investigate_affiliations(
         provider, name, papers, institution, source or "zh", english_name
     )

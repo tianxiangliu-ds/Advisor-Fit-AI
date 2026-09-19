@@ -12,9 +12,37 @@ from advisor_fit.providers.academic import Work
 
 _BASE_URL = "https://api.wfdata.com/openwanfang/getQuery"
 
+# 实测可用的 collection 预设（source -> collections）。
+# 中文库按中文名检索；英文库 OpenPeriodicalEng 只收英文记录，必须用英文名。
+COLLECTION_PRESETS: dict[str, list[str]] = {
+    "zh": ["OpenPeriodical", "OpenConference"],
+    "en": ["OpenPeriodicalEng"],
+    "thesis": ["OpenThesis"],
+}
+
+SOURCE_LABELS: dict[str, str] = {
+    "zh": "万方 · 中文（期刊 + 会议）",
+    "en": "万方 · 英文（英文期刊）",
+    "thesis": "万方 · 学位论文",
+}
+
 
 class WanfangUnavailable(Exception):
     """万方不可用；调用方应降级而不是伪造空成功。"""
+
+
+def group_english_authors(tokens: list[str]) -> list[str]:
+    """英文库的 Creator 把姓与缩写拆成扁平 token，按「姓 + 连续缩写」重组回作者。
+
+    例：["Fan","A.","Y.","Zhang","Q."] -> ["Fan A. Y.", "Zhang Q."]
+    """
+    grouped: list[str] = []
+    for token in tokens:
+        if grouped and token.endswith("."):
+            grouped[-1] = f"{grouped[-1]} {token}"
+        else:
+            grouped.append(token)
+    return grouped
 
 
 def _first_str(value) -> str:
@@ -59,10 +87,10 @@ class WanfangProvider:
         name: str,
         *,
         institution: str | None = None,
-        collections: list[str] | None = None,
+        source: str = "zh",
         limit: int = 20,
     ) -> list[Work]:
-        collections = collections or ["OpenPeriodical", "OpenConference"]
+        collections = COLLECTION_PRESETS.get(source, COLLECTION_PRESETS["zh"])
         query = f"Creator:{name}"
         if institution:
             query = f"Creator:{name} AND OrganizationForSearch:{institution}"
@@ -107,6 +135,9 @@ class WanfangProvider:
                 if doi
                 else (f"https://d.wanfangdata.com.cn/periodical/{doc_id}" if doc_id else None)
             )
+            authors = _all_str(fields.get("Creator"))
+            if source == "en":
+                authors = group_english_authors(authors)
             works.append(
                 Work(
                     id=doc_id or title,
@@ -114,10 +145,11 @@ class WanfangProvider:
                     year=year,
                     doi=doi or None,
                     abstract=_first_str(fields.get("Abstract")),
+                    venue=_first_str(fields.get("PeriodicalTitle")) or None,
                     source_url=source_url,
                     source_platform="万方",
                     topics=_all_str(fields.get("Keywords")),
-                    authors=_all_str(fields.get("Creator")),
+                    authors=authors,
                     institution=_first_str(fields.get("OrganizationNorm")),
                 )
             )

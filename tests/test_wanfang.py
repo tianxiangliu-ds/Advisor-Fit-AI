@@ -4,7 +4,7 @@ import json
 
 import httpx
 
-from advisor_fit.providers.wanfang import WanfangProvider
+from advisor_fit.providers.wanfang import WanfangProvider, group_english_authors
 
 
 def test_wanfang_search_parses_documents():
@@ -83,3 +83,78 @@ def test_wanfang_search_adds_institution_and_sorts_by_year():
     body = captured["body"]
     assert body["query"] == "Creator:陆伟 AND OrganizationForSearch:武汉大学"
     assert body["sort"] == {"sorts": [{"by": "PublishYear", "order": "DESC"}]}
+    assert body["collections"] == ["OpenPeriodical", "OpenConference"]
+
+
+def test_wanfang_english_source_uses_english_collection():
+    captured = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured["body"] = json.loads(request.content)
+        return httpx.Response(200, json={"documents": [], "numFound": "0"})
+
+    provider = WanfangProvider(
+        "test-key", client=httpx.Client(transport=httpx.MockTransport(handler))
+    )
+    provider.search_publications("Wei Lu", source="en")
+    assert captured["body"]["collections"] == ["OpenPeriodicalEng"]
+
+
+def test_wanfang_thesis_source_uses_thesis_collection():
+    captured = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured["body"] = json.loads(request.content)
+        return httpx.Response(200, json={"documents": [], "numFound": "0"})
+
+    provider = WanfangProvider(
+        "test-key", client=httpx.Client(transport=httpx.MockTransport(handler))
+    )
+    provider.search_publications("陆伟", source="thesis")
+    assert captured["body"]["collections"] == ["OpenThesis"]
+
+
+def test_wanfang_english_source_groups_split_author_tokens():
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={
+                "documents": [
+                    {
+                        "fields": {
+                            "Id": {"stringValue": "abc123"},
+                            "Title": {"stringValue": "Deep learning for X"},
+                            "Creator": {
+                                "listValue": {
+                                    "values": [
+                                        {"stringValue": "Fan"},
+                                        {"stringValue": "A."},
+                                        {"stringValue": "Y."},
+                                        {"stringValue": "Zhang"},
+                                        {"stringValue": "Q."},
+                                    ]
+                                }
+                            },
+                            "PeriodicalTitle": {"stringValue": "IEEE Access"},
+                        }
+                    }
+                ],
+                "numFound": "1",
+            },
+        )
+
+    provider = WanfangProvider(
+        "test-key", client=httpx.Client(transport=httpx.MockTransport(handler))
+    )
+    works = provider.search_publications("Fan", source="en")
+    assert works[0].authors == ["Fan A. Y.", "Zhang Q."]
+    assert works[0].venue == "IEEE Access"
+
+
+def test_group_english_authors_keeps_surname_initial_pairs():
+    assert group_english_authors(["Fan", "A.", "Y.", "Zhang", "Q."]) == [
+        "Fan A. Y.",
+        "Zhang Q.",
+    ]
+    assert group_english_authors(["陆伟"]) == ["陆伟"]
+    assert group_english_authors([]) == []

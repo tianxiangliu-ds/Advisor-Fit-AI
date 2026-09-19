@@ -20,9 +20,9 @@
 
 ## 产品边界
 
-**做**：本地 CV 解析、学生事实人工审核、手动导师资料、手动论文证据、分维度匹配、无 LLM 模板邮件、可选 LLM 润色、Markdown/JSON 导出、完整删除。
+**做**：本地 CV 解析、学生事实人工审核、手动导师资料、手动论文证据、可选万方检索候选（中文/英文/学位论文）、分维度匹配、无 LLM 模板邮件、可选 LLM 润色、Markdown/JSON 导出、完整删除。
 
-**暂不做**：官网自动解析、OpenAlex 自动搜索、Google Scholar/知网自动抓取、Word/Excel 导入、论文 PDF 解析、扫描件 OCR、批量导师、自动发送或跟进。
+**暂不做**：官网自动解析、OpenAlex/Google Scholar/知网自动抓取、Word/Excel 导入、论文 PDF 解析、扫描件 OCR、批量导师、自动发送或跟进。
 
 ## 安装与启动
 
@@ -44,6 +44,22 @@ uv run streamlit run app.py
 LLM 配置是可选的，支持多供应商：复制 `.env.example` 为 `.env`，设置 `LLM_PROVIDER`（`deepseek` 默认 / `openai` / `anthropic` / `ollama`）与 `LLM_API_KEY`。配置后，简历结构化抽取与邮件/声明生成走 LLM；未配置时自动降级为「规则抽取 + 事实锁定模板」，核心流程仍可完整运行。`LLM_BASE_URL`、`LLM_MODEL` 留空则使用所选供应商的默认地址与模型。
 
 简历解析：默认用 `pypdf` 提取文本；若额外安装了 `docling`（可选增强），会自动用它把 PDF 转成 Markdown，对复杂版式/表格/中文简历效果更好，失败时仍回退到 `pypdf`。
+
+## 可选在线检索（万方）
+
+在 `.env` 配置 `WANFANG_APP_KEY`（万方数据开放平台申请）后，「③ 导师资料与已核实论文」会出现「🔎 一键研究（Agent）」。检索结果只是候选，必须由用户逐条勾选确认归属后才会进入报告。
+
+数据源可选，实测均可用：
+
+| 数据源 | collection | 说明 |
+|---|---|---|
+| 万方 · 中文（期刊 + 会议） | `OpenPeriodical`、`OpenConference` | 默认，用中文名检索；建议同时填学校，按 `Creator:X AND OrganizationForSearch:Y` 减少同名歧义 |
+| 万方 · 英文（英文期刊） | `OpenPeriodicalEng` | 只收录英文文献，**必须用导师英文名**；机构字段常为空，学校过滤基本无效 |
+| 万方 · 学位论文 | `OpenThesis` | 收录的是学位论文作者（学生），**不提供「导师」字段**，按导师姓名检索会返回同名学生的论文，慎用 |
+
+结果按 `PublishYear` 倒序。万方未开放的 collection（`OpenNstr`、`OpenStandard`、`OpenCstad`、`OpenClaw` 等）当前返回 0 条，未接入。
+
+检索走自研轻量 Harness：LLM 通过 `run_loop` 决策调用哪个工具，无 LLM 时降级为直接检索。检索失败只提示错误，不影响手动录入流程。
 
 ## 第一次测试建议
 

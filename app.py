@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import uuid
+from pathlib import Path
 
 import streamlit as st
 from pydantic import ValidationError
@@ -17,7 +18,6 @@ from advisor_fit.export.report import export_docx, export_json, export_markdown
 from advisor_fit.ingest.cv import (
     apply_fact_edits,
     build_student_profile,
-    delete_uploaded_cv,
     extract_pdf_markdown,
     extract_pdf_text,
 )
@@ -53,15 +53,72 @@ def _build_student_profile(upload_path, parsed):
 def _new_run() -> None:
     st.session_state.repo = Repository(settings.data_dir / "app.db")
     st.session_state.run_id = st.session_state.repo.create_run()
+    st.session_state.setdefault("session_run_ids", []).append(st.session_state.run_id)
 
 
-def _reset_run() -> None:
-    run_id = st.session_state.get("run_id")
+def _clear_professor_state() -> None:
+    for key in (
+        "prof_name",
+        "prof_institution",
+        "prof_department",
+        "prof_title",
+        "prof_email",
+        "prof_interests",
+        "prof_homepage",
+        "prof_english_name",
+        "candidate_papers",
+        "_research_confirm",
+        "_research_steps",
+        "_research_granted",
+        "result",
+    ):
+        st.session_state.pop(key, None)
+
+
+def _reset_professor() -> None:
+    """开始新导师：清空导师区并开一条新记录，保留学生简历与历史。"""
+    _clear_professor_state()
+    _new_run()
+
+
+def _reset_all() -> None:
+    """清空本次会话全部数据：删除本次会话创建的所有记录与上传的 CV。"""
     repo = st.session_state.get("repo")
-    if run_id and repo is not None:
-        repo.delete_run(run_id)
-        delete_uploaded_cv(settings.uploads_dir, run_id)
-    for key in ("student", "student_fact_editor", "parsed_text", "result"):
+    for run_id in list(st.session_state.get("session_run_ids", [])):
+        if repo is not None:
+            try:
+                repo.delete_run(run_id)
+            except ValueError:
+                pass
+    cv_path = st.session_state.get("cv_path")
+    if cv_path:
+        try:
+            Path(cv_path).unlink(missing_ok=True)
+        except OSError:
+            pass
+    for key in (
+        "student",
+        "student_fact_editor",
+        "parsed_text",
+        "result",
+        "student_name",
+        "cv_path",
+        "session_run_ids",
+        "prof_name",
+        "prof_institution",
+        "prof_department",
+        "prof_title",
+        "prof_email",
+        "prof_interests",
+        "prof_homepage",
+        "prof_english_name",
+        "candidate_papers",
+        "_research_confirm",
+        "_research_steps",
+        "_research_granted",
+        "viewed_run",
+        "show_compare",
+    ):
         st.session_state.pop(key, None)
     _new_run()
 
@@ -93,7 +150,7 @@ def _set_all_facts(confirmed: bool) -> None:
         row["confirmed"] = confirmed
     for key in list(st.session_state.keys()):
         if key.startswith("fact_conf_"):
-            del st.session_state[key]
+            st.session_state[key] = confirmed
 
 
 def _split_terms(value: str) -> list[str]:
@@ -118,12 +175,34 @@ def _run_research(name: str, institution: str, mode: str, english_name: str) -> 
     if result.needs_confirmation:
         st.session_state["_research_confirm"] = result.needs_confirmation
         st.session_state["_research_steps"] = result.log
-        st.session_state.candidate_papers = []
+        st.session_state.candidate_papers = result.papers
     else:
         st.session_state.pop("_research_confirm", None)
         st.session_state["_research_steps"] = None
         st.session_state["_research_granted"] = []
         st.session_state.candidate_papers = result.papers
+
+
+def _set_all_candidates(confirmed: bool, *, matching_only: bool = False) -> None:
+    """候选论文全选/全不选（直接写 widget 状态与候选数据）。"""
+    papers = st.session_state.get("candidate_papers", [])
+    for index, paper in enumerate(papers):
+        if matching_only and not paper.get("belongs", True):
+            continue
+        paper["user_confirmed"] = confirmed
+        st.session_state[f"cand_paper_{index}"] = confirmed
+
+
+def _candidate_institutions() -> list[str]:
+    """候选论文中出现的机构，按出现次数排序（用于机构确认按钮）。"""
+    from collections import Counter
+
+    counter: Counter = Counter()
+    for paper in st.session_state.get("candidate_papers", []):
+        inst = str(paper.get("institution") or "").strip()
+        if inst:
+            counter[inst] += 1
+    return [inst for inst, _ in counter.most_common()]
 
 
 _FIT_BADGES = {
@@ -272,6 +351,7 @@ def _compare_runs(repo) -> list[dict]:
         match = MatchReport(**match_data)
         rows.append(
             {
+                "记录": run.get("name") or "—",
                 "导师": professor.name.value or professor.professor_id,
                 "研究匹配": match.research_fit.value,
                 "建议": match.recommendation.value,
@@ -282,15 +362,27 @@ def _compare_runs(repo) -> list[dict]:
     return rows
 
 
-st.set_page_config(page_title="导师双选 AI 助手 v0.1", layout="wide")
-st.title("导师双选 AI 助手 v0.1")
-st.caption("人工核实资料输入 · 本地优先 · 不依赖 OpenAlex · 不自动发送邮件")
+st.set_page_config(page_title="导师双选 AI 助手", layout="wide")
+st.markdown(
+    """
+    <style>
+    .block-container { padding-top: 1.5rem; }
+    h1 { color: #1f3a5f; }
+    h2, h3 { color: #1f3a5f; border-bottom: 2px solid #e3e8f0; padding-bottom: 0.3rem; }
+    [data-testid="stSidebar"] { background: #f7f9fc; }
+    </style>
+    """,
+    unsafe_allow_html=True,
+)
+st.title("导师双选 AI 助手")
+st.caption("上传简历 → 检索并核验导师 → 生成证据可溯的匹配报告与个性化邮件")
 
 for key, default in (
     ("student", None),
     ("student_fact_editor", []),
     ("parsed_text", ""),
     ("result", None),
+    ("student_name", ""),
 ):
     if key not in st.session_state:
         st.session_state[key] = default
@@ -302,15 +394,15 @@ with st.sidebar:
     runs = st.session_state.repo.list_runs()
     completed = [run for run in runs if run["status"] == "COMPLETED"]
     if not completed:
-        st.caption("暂无已完成的记录")
+        st.caption("暂无已完成的记录（生成一次报告后出现）")
     for run in completed[:20]:
-        label = f"{run['id'][:8]} · {(run['created_at'] or '')[:16]}"
+        label = run.get("name") or f"{run['id'][:8]} · {(run['created_at'] or '')[:16]}"
         if st.button(label, key=f"hist_{run['id']}"):
             view = _load_run_view(st.session_state.repo, run["id"])
             if view is not None:
                 st.session_state.viewed_run = view
     st.divider()
-    if st.button("📊 对比历史导师"):
+    if st.button("📊 对比历史导师", use_container_width=True):
         st.session_state.show_compare = not st.session_state.get("show_compare", False)
 
 if st.session_state.get("viewed_run") is not None:
@@ -326,28 +418,37 @@ if st.session_state.get("viewed_run") is not None:
 
 if st.session_state.get("show_compare"):
     st.header("📊 历史导师对比")
+    st.caption("已生成报告的历史导师横向对比；再次点击侧栏「📊 对比历史导师」可收起。")
     rows = _compare_runs(st.session_state.repo)
     if rows:
-        st.dataframe(rows, hide_index=True)
+        st.dataframe(rows, hide_index=True, use_container_width=True)
     else:
         st.info("暂无可对比的历史记录（先生成至少一次报告）。")
+    if st.button("收起对比"):
+        st.session_state.show_compare = False
+        st.rerun()
     st.divider()
 
 
 st.header("① 上传并确认简历")
 uploaded = st.file_uploader("上传 CV（PDF，仅在本机解析）", type=["pdf"])
-student_name = st.text_input("你的姓名（可选，用于邮件落款）")
 if st.button("解析 CV", type="primary", disabled=uploaded is None):
     upload_path = settings.uploads_dir / f"{st.session_state.run_id}.pdf"
     upload_path.parent.mkdir(parents=True, exist_ok=True)
     upload_path.write_bytes(uploaded.getvalue())
+    st.session_state["cv_path"] = str(upload_path)
     parsed = extract_pdf_text(upload_path)
     student = _build_student_profile(upload_path, parsed)
     st.session_state.student = student
     st.session_state.student_fact_editor = _fact_rows(student)
     st.session_state.parsed_text = parsed.text
+    if student.name:
+        st.session_state["student_name"] = student.name
     if parsed.warnings:
         st.warning("；".join(parsed.warnings))
+student_name = st.text_input(
+    "你的姓名（用于邮件落款，已自动从简历填入，请核对修改）", key="student_name"
+)
 
 if st.session_state.parsed_text:
     with st.expander("查看 PDF 提取文字"):
@@ -408,7 +509,7 @@ else:
 
 
 st.header("③ 导师资料与已核实论文")
-st.caption("可粘贴导师主页链接自动解析并检索；手动填写的字段作为解析失败时的保障。")
+st.caption("粘贴主页链接自动解析，或手动填写；随后用 Agent 检索并逐条确认候选论文。")
 
 for _key in (
     "prof_name",
@@ -422,7 +523,18 @@ for _key in (
 ):
     st.session_state.setdefault(_key, "")
 
-homepage_url = st.text_input("导师主页链接（可选，用于自动解析）", key="prof_homepage")
+col_new, col_parse = st.columns([0.32, 0.68])
+with col_new:
+    if st.button("🆕 开始新导师", use_container_width=True):
+        _reset_professor()
+        st.rerun()
+with col_parse:
+    homepage_url = st.text_input(
+        "导师主页链接（可选，用于自动解析）",
+        key="prof_homepage",
+        label_visibility="collapsed",
+        placeholder="粘贴导师主页或学校个人主页链接",
+    )
 if st.button("🔍 解析主页并自动检索"):
     url = homepage_url.strip()
     if not url:
@@ -465,41 +577,8 @@ with right:
 identity_confirmed = st.checkbox("我已核对并确认以上信息属于目标导师")
 paper_read_confirmed = st.checkbox("我已阅读以上论文（可选，允许邮件提及）")
 
-paper_count = int(st.number_input("录入论文数量", min_value=1, max_value=10, value=1))
-paper_values: list[dict] = []
-for index in range(paper_count):
-    number = index + 1
-    with st.expander(f"论文 {number}", expanded=number == 1):
-        paper_title = st.text_input("论文标题（必填）", key=f"paper_title_{index}")
-        paper_year_text = st.text_input("发表年份（可选）", key=f"paper_year_{index}")
-        paper_abstract = st.text_area("论文摘要（必填）", key=f"paper_abstract_{index}")
-        paper_url = st.text_input("来源链接（必填）", key=f"paper_url_{index}")
-        paper_platform = st.selectbox(
-            "来源平台",
-            ["DOI/出版社", "知网", "万方", "Google Scholar", "学校页面", "其他"],
-            key=f"paper_platform_{index}",
-        )
-        paper_keywords = st.text_input(
-            "关键词/研究主题（可选，用逗号或分号分隔）",
-            key=f"paper_keywords_{index}",
-        )
-        paper_confirmed = st.checkbox(
-            "我已确认这篇论文属于该导师", key=f"paper_confirmed_{index}"
-        )
-        paper_values.append(
-            {
-                "title": paper_title,
-                "year": int(paper_year_text) if paper_year_text.strip().isdigit() else None,
-                "abstract": paper_abstract,
-                "source_url": paper_url,
-                "source_platform": paper_platform,
-                "keywords": _split_terms(paper_keywords),
-                "user_confirmed": paper_confirmed,
-            }
-        )
-
-st.markdown("**或从万方检索候选论文（可选，需联网 + 万方 appkey）**")
-st.caption("Agent 会自动选择中/英文库、按学校消歧并排除疑似同名；结果仍须你逐条确认归属。")
+st.markdown("### 🔎 智能检索候选论文")
+st.caption("Agent 先按「姓名 + 学校」查万方，再逐篇消歧；结果须你勾选确认归属。")
 selected_mode = st.radio(
     "检索方式",
     ["auto", "zh", "en"],
@@ -532,7 +611,7 @@ def _trigger_search() -> None:
         st.session_state.candidate_papers = []
 
 
-if st.button("🔎 一键研究（Agent）"):
+if st.button("🔎 一键研究（Agent）", type="primary"):
     _trigger_search()
 
 if st.session_state.get("_auto_search"):
@@ -540,18 +619,65 @@ if st.session_state.get("_auto_search"):
     _trigger_search()
 
 if st.session_state.get("_research_confirm"):
-    st.warning(f"Agent 请求确认：{st.session_state['_research_confirm']}")
-    if st.button("✅ 确认并继续"):
-        st.session_state["_research_granted"] = [st.session_state["_research_confirm"]]
+    msg = st.session_state["_research_confirm"]
+    st.warning(f"Agent 请求确认：{msg}")
+    papers = st.session_state.candidate_papers
+    insts = _candidate_institutions()
+    st.caption("请选择处理方式：")
+    c1, c2, c3 = st.columns(3)
+    if c1.button("✅ 确认并继续", use_container_width=True):
+        st.session_state["_research_granted"] = [msg]
         _trigger_search()
+    if c2.button("🔁 去掉学校重新检索", use_container_width=True):
+        st.session_state.pop("_research_confirm", None)
+        st.session_state["_research_steps"] = None
+        st.session_state["_research_granted"] = []
+        _run_research(search_name, "", selected_mode, english_name.strip())
+    if c3.button("📋 全部保留，我手动核对", use_container_width=True):
+        for paper in papers:
+            paper["belongs"] = True
+            paper["needs_review"] = False
+        st.session_state.pop("_research_confirm", None)
+        st.session_state["_research_steps"] = None
+        st.session_state["_research_granted"] = []
+    if insts:
+        st.caption("或按机构保留（应对导师刚调动单位的情况）：")
+        icols = st.columns(len(insts[:4]))
+        for idx, inst in enumerate(insts[:4]):
+            if icols[idx].button(f"仅保留「{inst}」", use_container_width=True):
+                for paper in papers:
+                    keep = (paper.get("institution") or "").strip() == inst
+                    paper["belongs"] = keep
+                    paper["needs_review"] = False
+                    if not keep:
+                        paper["user_confirmed"] = False
+                st.session_state.pop("_research_confirm", None)
+                st.session_state["_research_steps"] = None
+                st.session_state["_research_granted"] = []
 
 papers = st.session_state.candidate_papers
+paper_values: list[dict] = []
 if papers:
-    belongs_idx = [i for i, paper in enumerate(papers) if paper.get("belongs", True)]
-    homonym_idx = [i for i, paper in enumerate(papers) if not paper.get("belongs", True)]
-    st.caption(f"检索到 {len(papers)} 篇候选论文，勾选确认采用的：")
-    for i in belongs_idx:
-        cand = papers[i]
+    normal = [
+        i for i, paper in enumerate(papers)
+        if paper.get("belongs", True) and not paper.get("needs_review", False)
+    ]
+    review = [
+        i for i, paper in enumerate(papers)
+        if paper.get("belongs", True) and paper.get("needs_review", False)
+    ]
+    homonym = [i for i, paper in enumerate(papers) if not paper.get("belongs", True)]
+    st.caption(
+        f"共 {len(papers)} 篇候选：{len(normal)} 篇匹配 · "
+        f"{len(review)} 篇需审核 · {len(homonym)} 篇疑似同名。"
+    )
+    col_all, col_none, _ = st.columns([0.15, 0.15, 0.7])
+    if col_all.button("全选匹配项", use_container_width=True):
+        _set_all_candidates(True, matching_only=True)
+    if col_none.button("全不选", use_container_width=True):
+        _set_all_candidates(False)
+
+    def _render_candidate(index: int, cand: dict) -> None:
         label = f"{cand['title']}（{cand['year'] or '年份未知'}）"
         if cand.get("venue"):
             label += f" · {cand['venue']}"
@@ -559,24 +685,60 @@ if papers:
             label += f" · {cand['institution']}"
         if cand.get("authors"):
             label += f"〔{'、'.join(cand['authors'])}〕"
-        cand["user_confirmed"] = st.checkbox(label, key=f"cand_paper_{i}", help=cand["source_url"])
-    if homonym_idx:
-        with st.expander(
-            f"⚠ 疑似同名论文（{len(homonym_idx)} 篇，Agent 已排除，可手动加回）"
-        ):
-            for i in homonym_idx:
-                cand = papers[i]
-                label = f"{cand['title']}（{cand['year'] or '年份未知'}）"
-                if cand.get("institution"):
-                    label += f" · {cand['institution']}"
-                if cand.get("authors"):
-                    label += f"〔{'、'.join(cand['authors'])}〕"
-                if cand.get("disambig_reason"):
-                    label += f" — {cand['disambig_reason']}"
-                cand["user_confirmed"] = st.checkbox(
-                    label, key=f"cand_paper_{i}", help=cand["source_url"]
-                )
+        cand["user_confirmed"] = st.checkbox(label, key=f"cand_paper_{index}")
+        if cand.get("source_url"):
+            st.markdown(f"　🔗 [查看原文]({cand['source_url']})")
+
+    for i in normal:
+        _render_candidate(i, papers[i])
+    if review:
+        with st.expander(f"⚠ 机构不符需审核（{len(review)} 篇，可能是导师曾任职单位）"):
+            for i in review:
+                _render_candidate(i, papers[i])
+                if papers[i].get("disambig_reason"):
+                    st.caption(papers[i]["disambig_reason"])
+    if homonym:
+        with st.expander(f"🚫 疑似同名（{len(homonym)} 篇，Agent 已排除，可手动加回）"):
+            for i in homonym:
+                _render_candidate(i, papers[i])
+                if papers[i].get("disambig_reason"):
+                    st.caption(papers[i]["disambig_reason"])
     paper_values.extend([cand for cand in papers if cand["user_confirmed"]])
+
+with st.expander("✍️ 手动补录论文（检索不到时使用）"):
+    paper_count = int(st.number_input("补录论文数量", min_value=1, max_value=10, value=1))
+    for index in range(paper_count):
+        number = index + 1
+        with st.expander(f"补录论文 {number}", expanded=number == 1):
+            paper_title = st.text_input("论文标题（必填）", key=f"paper_title_{index}")
+            paper_year_text = st.text_input("发表年份（可选）", key=f"paper_year_{index}")
+            paper_abstract = st.text_area("论文摘要（必填）", key=f"paper_abstract_{index}")
+            paper_url = st.text_input("来源链接（必填）", key=f"paper_url_{index}")
+            paper_platform = st.selectbox(
+                "来源平台",
+                ["DOI/出版社", "知网", "万方", "Google Scholar", "学校页面", "其他"],
+                key=f"paper_platform_{index}",
+            )
+            paper_keywords = st.text_input(
+                "关键词/研究主题（可选，用逗号或分号分隔）",
+                key=f"paper_keywords_{index}",
+            )
+            paper_confirmed = st.checkbox(
+                "我已确认这篇论文属于该导师", key=f"paper_confirmed_{index}"
+            )
+            paper_values.append(
+                {
+                    "title": paper_title,
+                    "year": int(paper_year_text) if paper_year_text.strip().isdigit() else None,
+                    "abstract": paper_abstract,
+                    "source_url": paper_url,
+                    "source_platform": paper_platform,
+                    "keywords": _split_terms(paper_keywords),
+                    "user_confirmed": paper_confirmed,
+                }
+            )
+
+run_label = st.text_input("本次记录名称（留空则用「导师名 · 单位」）", key="run_label")
 
 can_generate = edited_student is not None and bool(confirmed_fact_ids)
 if st.button("生成报告与邮件草稿", type="primary", disabled=not can_generate):
@@ -628,6 +790,8 @@ if st.button("生成报告与邮件草稿", type="primary", disabled=not can_gen
                 run_id=st.session_state.run_id,
                 paper_read_confirmed=paper_read_confirmed,
             )
+        name = run_label.strip() or f"{professor_name.strip()} · {institution.strip()}"
+        st.session_state.repo.set_run_name(st.session_state.run_id, name)
     except (ValidationError, ValueError) as exc:
         st.error(f"请检查输入：{exc}")
     except Exception as exc:  # noqa: BLE001 - UI 必须显示可操作错误
@@ -648,6 +812,6 @@ if result is not None:
         file_name="advisor-report.docx",
         mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
     )
-    if st.button("删除本次数据", type="secondary"):
-        _reset_run()
+    if st.button("🗑 清空全部数据", type="secondary"):
+        _reset_all()
         st.rerun()

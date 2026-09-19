@@ -55,3 +55,12 @@ def test_llm_cv_drops_invalid_fields_and_duplicates():
     )
     profile = build_student_profile_llm("x", llm)
     assert [(f.field, f.value) for f in profile.facts] == [("skill", "Python")]
+
+
+def test_llm_cv_extracts_name():
+    class NameLLM:
+        def generate(self, *, schema, instructions, payload):
+            return StudentProfileOutput(name="张三", facts=[])
+
+    profile = build_student_profile_llm("张三\nPython 硕士", NameLLM())
+    assert profile.name == "张三"

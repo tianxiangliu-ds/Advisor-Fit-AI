@@ -53,6 +53,16 @@ _SURNAMES = "".join(
 荆红游竺权逯盖益桓公""".split()
 )
 _NAME_RE = re.compile(r"(?<![一-龥])[" + _SURNAMES + r"][一-龥]{1,2}")
+_NAME_LINE_RE = re.compile(r"^[一-龥·]{2,4}$")
+
+
+def extract_name_rule(text: str) -> str | None:
+    """无 LLM 时的姓名启发式：取前几行中形如「2–4 个汉字」的首个候选。"""
+    for line in text.splitlines()[:8]:
+        line = line.strip()
+        if _NAME_LINE_RE.match(line) and "·" not in line:
+            return line
+    return None
 
 
 def extract_pdf_text(path: Path | str) -> ParsedDocument:
@@ -219,7 +229,7 @@ def build_student_profile(document: ParsedDocument) -> StudentProfile:
                 )
                 i += 1
 
-    return StudentProfile(student_id="student_1", facts=facts)
+    return StudentProfile(student_id="student_1", name=extract_name_rule(text), facts=facts)
 
 
 def apply_fact_edits(

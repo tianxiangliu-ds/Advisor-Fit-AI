@@ -98,6 +98,23 @@ class ManualProfessorInput(BaseModel):
         return cleaned
 
 
+_PLATFORM_SOURCE_TYPE = {
+    "万方": "万方检索",
+    "知网": "知网",
+    "DOI/出版社": "出版社/DOI",
+    "DOI": "出版社/DOI",
+    "出版社": "出版社/DOI",
+    "Google Scholar": "Google Scholar",
+    "学校页面": "学校页面",
+    "其他": "人工录入",
+}
+
+
+def paper_source_type(platform: str) -> str:
+    """把论文来源平台映射为证据来源标签（用于报告与导出展示）。"""
+    return _PLATFORM_SOURCE_TYPE.get(platform or "", "人工录入")
+
+
 def validate_paper_values(papers: list[dict]) -> list[str]:
     """返回论文必填项缺失的友好错误信息（中文）；空列表表示齐全。"""
     errors: list[str] = []
@@ -194,7 +211,7 @@ def build_manual_materials(
         evidences.append(
             Evidence(
                 id=evidence_id,
-                source_type="user_confirmed_paper",
+                source_type=paper_source_type(paper.source_platform),
                 source_url=paper.source_url,
                 title=paper.title,
                 published_date=str(paper.year) if paper.year else None,

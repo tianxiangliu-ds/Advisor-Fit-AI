@@ -60,6 +60,11 @@ class Repository:
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
         with closing(self._connect()) as conn:
             conn.executescript(_SCHEMA_PATH.read_text(encoding="utf-8"))
+            # 迁移：旧库补 name 列（CREATE TABLE IF NOT EXISTS 不会加列）
+            try:
+                conn.execute("ALTER TABLE runs ADD COLUMN name TEXT")
+            except sqlite3.OperationalError:
+                pass
 
     @staticmethod
     def _now() -> str:
@@ -67,13 +72,14 @@ class Repository:
 
     # -- 运行生命周期 ---------------------------------------------------------
 
-    def create_run(self) -> str:
+    def create_run(self, name: str | None = None) -> str:
         run_id = str(uuid.uuid4())
         now = self._now()
         with self._tx() as conn:
             conn.execute(
-                "INSERT INTO runs (id, status, created_at, updated_at) VALUES (?, ?, ?, ?)",
-                (run_id, "STARTED", now, now),
+                "INSERT INTO runs (id, status, name, created_at, updated_at)"
+                " VALUES (?, ?, ?, ?, ?)",
+                (run_id, "STARTED", name, now, now),
             )
         return run_id
 
@@ -82,6 +88,13 @@ class Repository:
             conn.execute(
                 "UPDATE runs SET status = ?, updated_at = ? WHERE id = ?",
                 (status, self._now(), run_id),
+            )
+
+    def set_run_name(self, run_id: str, name: str) -> None:
+        with self._tx() as conn:
+            conn.execute(
+                "UPDATE runs SET name = ?, updated_at = ? WHERE id = ?",
+                (name, self._now(), run_id),
             )
 
     def load_run(self, run_id: str) -> dict[str, Any] | None:
@@ -108,7 +121,7 @@ class Repository:
     def list_runs(self) -> list[dict[str, Any]]:
         with closing(self._connect()) as conn:
             rows = conn.execute(
-                "SELECT id, status, created_at, updated_at FROM runs ORDER BY created_at DESC"
+                "SELECT id, status, name, created_at, updated_at FROM runs ORDER BY created_at DESC"
             ).fetchall()
         return [dict(row) for row in rows]
 

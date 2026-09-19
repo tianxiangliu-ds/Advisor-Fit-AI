@@ -102,3 +102,16 @@ def test_list_runs_returns_created_runs(tmp_path):
     run2 = repo.create_run()
     ids = {run["id"] for run in repo.list_runs()}
     assert {run1, run2} <= ids
+
+
+def test_run_name_can_be_set_and_listed(tmp_path):
+    repo = Repository(tmp_path / "test.db")
+    run_id = repo.create_run(name="陆伟 · 武汉大学")
+    assert repo.load_run(run_id)["name"] == "陆伟 · 武汉大学"
+
+    repo.set_run_name(run_id, "陆伟 · 中国地质大学（武汉）")
+    run = repo.load_run(run_id)
+    assert run["name"] == "陆伟 · 中国地质大学（武汉）"
+
+    listed = {run["id"]: run["name"] for run in repo.list_runs()}
+    assert listed[run_id] == "陆伟 · 中国地质大学（武汉）"

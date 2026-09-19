@@ -9,13 +9,19 @@ from advisor_fit.models.professor import ProfessorProfile
 from advisor_fit.models.student import StudentProfile
 
 _DRAFT_INSTRUCTIONS = (
-    "写一封中文联系邮件草稿，正文 180–350 字。"
-    "结构：身份与目的 1–2 句、最强经历连接 2–3 句、导师真实研究连接 1–2 句、"
-    "明确询问与附件说明、收尾。每句显式标注 sentence_type："
-    "PROFESSOR_FACT（涉及导师事实，只引用 payload 提供的 evidence_ids）；"
-    "STUDENT_FACT（涉及学生经历，只引用 payload 提供的 fact id）；"
+    "写一封真诚、具体、个性化的中文套磁邮件正文（250–450 字），用于联系导师。"
+    "必须基于 payload 提供的学生经历与导师研究，把「学生具体经历」与「导师具体研究」"
+    "自然地连接起来——例如点出导师某篇论文/某个方向与你的项目或技能如何契合；"
+    "不要空泛罗列、不要照搬原文措辞。"
+    "结构：称呼与自我介绍（1–2 句）→ 与导师研究的具体连接（2–4 句，引用真实论文/方向）"
+    "→ 你的相关经历与能力（2–3 句）→ 明确询问（1 句，如招生名额或能否进一步交流）→ 落款。"
+    "每句显式标注 sentence_type："
+    "PROFESSOR_FACT（涉及导师事实，evidence_ids 只引用 payload 中论文的 source_ids "
+    "或主题的 evidence_ids）；"
+    "STUDENT_FACT（涉及学生经历，fact_ids 只引用 payload 提供的 fact id）；"
     "GENERIC（问候、意图、收尾）。"
-    "禁止使用拜读、久仰、震撼等未经证实的恭维措辞；不要声称已阅读某篇论文。"
+    "禁止使用拜读、久仰、震撼等未经证实的恭维；不要声称已阅读某篇论文。"
+    "语气真诚克制，体现对导师研究的真实理解，而非模板套话。"
 )
 
 
@@ -32,15 +38,35 @@ def generate_draft(
     paper_read_confirmed: bool = False,
 ) -> Draft:
     payload = {
+        "student_name": student.name or "一名学生",
         "student_facts": [
             {"id": f.id, "field": f.field, "value": f.value}
             for f in student.draftable_facts()
         ],
+        "professor_name": professor.name.value or professor.professor_id or "老师",
         "professor_topics": [
             {"topic": t.topic, "evidence_ids": t.evidence_ids}
             for t in [*professor.observed_recent_topics, *professor.declared_interests]
         ],
+        "publications": [
+            {
+                "title": p.title,
+                "year": p.year,
+                "keywords": p.keywords,
+                "abstract": (p.abstract or "")[:200],
+                "source_ids": p.source_ids,
+            }
+            for p in professor.recent_publications
+        ],
         "recommendation": match_report.recommendation.value,
+        "strengths": [
+            {
+                "label": d.label,
+                "student_fact_ids": d.student_fact_ids,
+                "professor_evidence_ids": d.professor_evidence_ids,
+            }
+            for d in match_report.strengths
+        ],
     }
     try:
         output = llm.generate(

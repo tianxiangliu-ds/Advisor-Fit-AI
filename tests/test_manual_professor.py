@@ -49,7 +49,7 @@ def test_unconfirmed_papers_do_not_become_evidence():
 
     assert len(materials.works) == 1
     assert materials.works[0].title == "Confirmed paper"
-    assert len([e for e in materials.evidences if e.source_type == "user_confirmed_paper"]) == 1
+    assert len([e for e in materials.evidences if e.source_type == "出版社/DOI"]) == 1
 
 
 def test_manual_materials_preserve_abstract_link_and_keywords():
@@ -64,7 +64,7 @@ def test_manual_materials_preserve_abstract_link_and_keywords():
 
     materials = build_manual_materials(professor, id_prefix="run123")
     paper = materials.works[0]
-    evidence = next(e for e in materials.evidences if e.source_type == "user_confirmed_paper")
+    evidence = next(e for e in materials.evidences if e.source_type == "出版社/DOI")
 
     assert materials.anchor.name == "王老师"
     assert materials.anchor.institution == "武汉大学"

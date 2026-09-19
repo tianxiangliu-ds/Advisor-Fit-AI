@@ -3,6 +3,7 @@ PRAGMA foreign_keys = ON;
 CREATE TABLE IF NOT EXISTS runs (
   id TEXT PRIMARY KEY,
   status TEXT NOT NULL,
+  name TEXT,
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL
 );

@@ -64,16 +64,21 @@ def test_institutions_conflict():
     assert _institutions_conflict("武汉大学", None) is False
 
 
-def test_rule_disambiguate_marks_conflicting_institution():
+def test_rule_disambiguate_marks_conflicting_institution_for_review():
     papers = [
-        {"title": "A", "institution": "武汉大学", "belongs": True, "disambig_reason": ""},
-        {"title": "B", "institution": "中国药科大学", "belongs": True, "disambig_reason": ""},
-        {"title": "C", "institution": "", "belongs": True, "disambig_reason": ""},
+        {"title": "A", "institution": "武汉大学", "belongs": True,
+         "needs_review": False, "disambig_reason": ""},
+        {"title": "B", "institution": "中国药科大学", "belongs": True,
+         "needs_review": False, "disambig_reason": ""},
+        {"title": "C", "institution": "", "belongs": True,
+         "needs_review": False, "disambig_reason": ""},
     ]
     result = _rule_disambiguate(papers, "武汉大学")
     assert result[0]["belongs"] is True
-    assert result[1]["belongs"] is False
-    assert result[2]["belongs"] is True
+    assert result[0]["needs_review"] is False
+    assert result[1]["belongs"] is True
+    assert result[1]["needs_review"] is True
+    assert result[2]["needs_review"] is False
 
 
 def test_disambiguate_papers_uses_llm_verdicts():
@@ -101,7 +106,8 @@ def test_disambiguate_papers_falls_back_to_rule_without_llm():
     result = disambiguate_papers(
         NullLLM(), papers, professor_name="陆伟", institution="武汉大学"
     )
-    assert result[1]["belongs"] is False
+    assert result[1]["belongs"] is True
+    assert result[1]["needs_review"] is True
 
 
 def test_merge_search_results_dedupes_by_title():
@@ -125,7 +131,9 @@ def test_research_professor_without_llm_searches_and_disambiguates():
     )
     assert len(result.papers) == 2
     assert result.papers[0]["belongs"] is True
-    assert result.papers[1]["belongs"] is False
+    assert result.papers[0]["needs_review"] is False
+    assert result.papers[1]["belongs"] is True
+    assert result.papers[1]["needs_review"] is True
     assert result.needs_confirmation == ""
 
 

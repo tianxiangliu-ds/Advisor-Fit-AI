@@ -75,7 +75,7 @@ def test_manual_pipeline_runs_offline_and_generates_grounded_template(tmp_path):
     assert result.draft.subject
     assert result.draft.sentences
     assert result.draft_validation.ok
-    assert all(e.source_url for e in result.evidences if e.source_type == "user_confirmed_paper")
+    assert all(e.source_url for e in result.evidences if e.source_type == "出版社/DOI")
     assert repository.load_run(result.run_id)["status"] == "COMPLETED"
     markdown = export_markdown(result)
     assert "王老师" in markdown

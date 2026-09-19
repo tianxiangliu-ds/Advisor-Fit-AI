@@ -32,6 +32,7 @@ def work_to_paper(work: Work) -> dict:
         "institution": work.institution,
         "venue": work.venue or "",
         "belongs": True,
+        "needs_review": False,
         "disambig_reason": "",
     }
 
@@ -39,6 +40,7 @@ def work_to_paper(work: Work) -> dict:
 class PaperVerdict(BaseModel):
     index: int
     belongs: bool = True
+    needs_review: bool = False
     reason: str = ""
 
 
@@ -49,7 +51,11 @@ class DisambiguationOutput(BaseModel):
 _DISAMBIG_INSTRUCTIONS = (
     "判断每篇候选论文是否属于目标导师本人（而非同名作者）。"
     "依据：论文机构是否匹配、合作作者是否稳定、研究主题是否连续。"
-    "不确定时 belongs 取 true（保留给用户人工确认），reason 用中文简短说明依据。"
+    "belongs 取 true 表示属于该导师，false 表示同名他人。"
+    "若论文机构与目标学校不同、但研究主题或合作作者与该导师连续，"
+    "可能是导师曾任职单位或刚调动，此时 belongs 取 true 且 needs_review 取 true，"
+    "reason 用中文说明「机构不同、疑似调动」；只有领域明显不同才 belongs=false。"
+    "不确定时 belongs 取 true（保留给用户人工确认）。"
     "index 必须与 payload 中每篇论文的 index 一一对应，不要遗漏。"
 )
 
@@ -64,11 +70,14 @@ def _institutions_conflict(paper_institution: str, institution: str | None) -> b
 
 
 def _rule_disambiguate(papers: list[dict], institution: str | None) -> list[dict]:
-    """无 LLM 时的确定性消歧：机构明显不符的标为疑似同名。"""
+    """无 LLM 时的确定性消歧：机构不符的标记为需人工审核（可能是导师曾任职单位）。"""
     for paper in papers:
         if _institutions_conflict(paper.get("institution", ""), institution):
-            paper["belongs"] = False
-            paper["disambig_reason"] = f"机构不符：{paper.get('institution')}"
+            paper["belongs"] = True
+            paper["needs_review"] = True
+            paper["disambig_reason"] = (
+                f"机构与填写学校不同（{paper.get('institution')}），可能为曾任职单位"
+            )
     return papers
 
 
@@ -113,6 +122,7 @@ def disambiguate_papers(
         verdict = verdicts.get(index)
         if verdict is not None:
             paper["belongs"] = verdict.belongs
+            paper["needs_review"] = verdict.needs_review
             paper["disambig_reason"] = verdict.reason
     return papers
 

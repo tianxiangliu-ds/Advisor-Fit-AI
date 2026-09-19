@@ -39,6 +39,24 @@ def generate_deep_analysis(
             {"id": f.id, "field": f.field, "value": f.value}
             for f in student.draftable_facts()
         ],
+        "student_education": [
+            {
+                "degree": e.degree,
+                "institution": e.institution,
+                "major": e.major,
+                "start_year": e.start_year,
+                "end_year": e.end_year,
+            }
+            for e in student.education
+        ],
+        "student_projects": [
+            {"name": p.name, "description": p.description, "role": p.role}
+            for p in student.projects
+        ],
+        "student_publications": [
+            {"title": p.title, "venue": p.venue, "year": p.year}
+            for p in student.publications
+        ],
         "professor_topics": [
             {"topic": t.topic, "evidence_ids": t.evidence_ids}
             for t in [*professor.observed_recent_topics, *professor.declared_interests]

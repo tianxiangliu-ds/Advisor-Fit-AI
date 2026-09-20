@@ -14,6 +14,11 @@ import streamlit as st
 from pydantic import ValidationError
 
 from advisor_fit.agents.research import research_professor
+from advisor_fit.analysis.direction_search import (
+    completeness_text,
+    rank_candidates,
+    split_terms,
+)
 from advisor_fit.analysis.identity import STATUS_LABELS, assess_identity
 from advisor_fit.config import settings
 from advisor_fit.export.report import export_docx, export_json, export_markdown
@@ -39,6 +44,7 @@ from advisor_fit.llm.provider import NullLLM, build_llm
 from advisor_fit.manual_pipeline import run_manual_pipeline
 from advisor_fit.providers.disciplines import DISCIPLINE_LABELS
 from advisor_fit.providers.router import SearchRouter
+from advisor_fit.storage.advisor_repo import AdvisorRepository
 from advisor_fit.storage.cache import PageCache
 from advisor_fit.storage.repository import Repository
 from advisor_fit.storage.roster_repo import RosterRepository
@@ -256,11 +262,65 @@ def _faculty_repo():
     return FacultyRepository(settings.data_dir / "faculty.db")
 
 
+def _advisor_repo() -> AdvisorRepository:
+    """统一导师库（3 万条，全项目唯一的一份导师数据）。"""
+    return AdvisorRepository(settings.data_dir / "advisors.db")
+
+
+def _advisor_as_faculty(item):
+    """把统一导师库的一条记录，适配成旧的导师库记录形状（复用已有的填充逻辑）。"""
+    from advisor_fit.models.faculty import FacultyRecord
+
+    return FacultyRecord(
+        id=f"{item.university}|{item.department}|{item.name}",
+        name=item.name,
+        university=item.university,
+        college=item.department,
+        department=item.department,
+        title=item.title,
+        homepage_url=item.homepage_url,
+        email=item.email,
+        research_areas=item.research_areas,
+        research_directions=item.research_directions,
+        publications=item.publications,
+        profile_text=item.profile_text,
+        source_url=item.source_url,
+        retrieved_at=item.retrieved_at,
+    )
+
+
 def _lookup_faculty(name: str, institution: str) -> list:
+    """按姓名+学校查本地导师库：先查统一库（3 万条），没有再退回早期采集库。"""
+    if not (name or "").strip():
+        return []
+    try:
+        advisors = _advisor_repo().lookup(name, institution or None)
+    except Exception:  # noqa: BLE001 - 导师库缺失/损坏不影响检索
+        advisors = []
+    if advisors:
+        return [_advisor_as_faculty(item) for item in advisors]
     try:
         return _faculty_repo().lookup(name, institution or None)
-    except Exception:  # noqa: BLE001 - 导师库缺失/损坏不影响检索
+    except Exception:  # noqa: BLE001
         return []
+
+
+def _fill_professor_from_advisor(item) -> None:
+    """把导师库记录填进「Ⅱ 导师档案」的各个字段（用户仍可修改）。"""
+    st.session_state["prof_name"] = item.name
+    st.session_state["prof_institution"] = item.university
+    st.session_state["prof_department"] = item.department
+    st.session_state["prof_title"] = item.title
+    st.session_state["prof_email"] = item.email
+    if item.homepage_url:
+        st.session_state["prof_homepage"] = item.homepage_url
+    directions = item.research_directions or item.research_areas
+    if directions:
+        st.session_state["prof_interests"] = "、".join(directions)
+    if item.publications:
+        st.session_state["prof_seed_titles"] = "\n".join(item.publications)
+    st.session_state["_faculty_directions"] = directions
+    st.session_state["_faculty_seed_titles"] = item.publications
 
 
 def _manual_professor_fields() -> dict[str, str]:
@@ -638,6 +698,7 @@ with st.sidebar:
     st.markdown('<div class="side-label">WORKSPACE / 工作台</div>', unsafe_allow_html=True)
     pages = (
         ("home", "✦  首屏 / 项目入口"),
+        ("direction", "◌  方向找导师"),
         ("resume", "Ⅰ  学生事实"),
         ("professor", "Ⅱ  导师档案"),
         ("papers", "Ⅲ  论文核验"),
@@ -677,6 +738,152 @@ if active_page == "home":
                 '<b>01</b>整理自身　<b>02</b>理解导师　<b>03</b>核实论文　'
                 '<b>04</b>形成判断</div>', unsafe_allow_html=True)
     st.button("开始一项研究 →", type="primary", on_click=_navigate, args=("resume",))
+    st.stop()
+
+if active_page == "direction":
+    st.markdown('<div class="page-eyebrow">00 / FIND BY DIRECTION</div>', unsafe_allow_html=True)
+    st.title("先找方向，再找人。")
+    st.markdown(
+        '<p class="page-intro">用研究方向在本地导师库里粗筛候选，看清「为什么推荐他」，'
+        '再挑人进入逐个深度研究。这一步不联网，也不会替你决定谁合适。</p>',
+        unsafe_allow_html=True,
+    )
+    library_repo = _advisor_repo()
+    try:
+        library_total = library_repo.count()
+    except Exception:  # noqa: BLE001 - 库损坏不该让页面崩掉
+        library_total = 0
+
+    if not library_total:
+        st.info("本地导师库还是空的。")
+        st.markdown(
+            "建库方式（可选，需要联网、由你手动触发）：\n\n"
+            "```powershell\n"
+            ".\\\\.venv\\\\Scripts\\\\python.exe scripts\\\\crawl_university.py"
+            " --university 武汉大学\n"
+            "```\n\n"
+            "还没有库也不影响使用：可以在「Ⅱ 导师档案」里手动填写导师信息，"
+            "或者用「📇 从导师名册里挑一位」按学校/学院/姓名选人。"
+        )
+    else:
+        st.caption(
+            f"本地导师库：{library_total} 位导师　·　"
+            "数据来自官网采集与公开名册，请以你核对为准"
+        )
+        direction_query = st.text_input(
+            "研究方向关键词（用逗号、顿号或分号分隔）",
+            key="direction_query",
+            placeholder="例如：知识图谱、数字人文、文化遗产",
+        )
+        try:
+            all_universities = library_repo.universities()
+        except Exception:  # noqa: BLE001
+            all_universities = []
+        direction_scope = st.multiselect(
+            "限定学校（留空 = 全库）", all_universities, key="direction_scope"
+        )
+
+        if st.button("🔍 找候选导师", type="primary"):
+            terms = split_terms(direction_query)
+            if not terms:
+                st.warning("请至少填一个研究方向关键词。")
+            else:
+                with st.spinner("在本地导师库里粗筛并排序…"):
+                    try:
+                        pool = library_repo.search_by_terms(
+                            terms, universities=direction_scope or None
+                        )
+                        hits = rank_candidates(
+                            pool,
+                            terms,
+                            universities=direction_scope or None,
+                            limit=20,
+                        )
+                    except Exception as exc:  # noqa: BLE001
+                        hits = []
+                        st.error(f"检索本地导师库失败：{exc}")
+                st.session_state["direction_hits"] = [
+                    {
+                        "row": hit.to_row(),
+                        "advisor": hit.advisor.model_dump(),
+                        "completeness_text": completeness_text(hit.advisor),
+                    }
+                    for hit in hits
+                ]
+                st.session_state["direction_terms"] = terms
+                st.session_state.pop("direction_picked", None)
+
+        hits = st.session_state.get("direction_hits") or []
+        if hits:
+            terms = st.session_state.get("direction_terms") or []
+            st.markdown('<div class="section-note">CANDIDATES / 候选导师</div>',
+                        unsafe_allow_html=True)
+            st.caption(
+                f"关键词：{'、'.join(terms)}　·　共 {len(hits)} 位候选，"
+                "按「命中权重 → 资料完整度」排序；匹配理由就是推荐依据，请自行核对。"
+            )
+            st.dataframe(
+                [
+                    {
+                        "姓名": hit["row"]["姓名"],
+                        "学校": hit["row"]["学校"],
+                        "院系": hit["row"]["院系"],
+                        "职称": hit["row"]["职称"],
+                        "研究方向": hit["row"]["研究方向"],
+                        "匹配理由": hit["row"]["匹配理由"],
+                        "资料完整度": hit["row"]["资料完整度"],
+                    }
+                    for hit in hits
+                ],
+                hide_index=True,
+                use_container_width=True,
+            )
+            labels = {
+                f"{index + 1:02d} · {hit['row']['姓名']} · {hit['row']['学校']}"
+                f" · {hit['row']['院系'] or '院系未采集'}": index
+                for index, hit in enumerate(hits)
+            }
+            picked = st.multiselect(
+                "勾选要并排比较的候选（建议 2–5 位）", list(labels), key="direction_picked"
+            )
+            if picked:
+                chosen = [hits[labels[label]] for label in picked][:5]
+                st.markdown('<div class="section-note">SIDE BY SIDE / 并排比较</div>',
+                            unsafe_allow_html=True)
+                columns = st.columns(len(chosen), gap="large")
+                for column, hit in zip(columns, chosen, strict=True):
+                    with column, st.container(border=True):
+                        st.subheader(hit["row"]["姓名"])
+                        st.caption(
+                            f"{hit['row']['学校']} · {hit['row']['院系'] or '院系未采集'}"
+                        )
+                        st.write("**职称**　" + hit["row"]["职称"])
+                        st.write("**研究方向**　" + hit["row"]["研究方向"])
+                        st.write("**匹配理由**　" + hit["row"]["匹配理由"])
+                        st.write("**资料完整度**　" + hit["row"]["资料完整度"])
+                        if hit["row"]["主页"] != "未采集":
+                            st.markdown(f"[导师主页 ↗]({hit['row']['主页']})")
+                        st.caption("资料来自：" + hit["row"]["来源"])
+                        st.caption("字段核对：" + hit["completeness_text"])
+
+            st.markdown('<div class="section-note">NEXT STEP / 下一步</div>',
+                        unsafe_allow_html=True)
+            st.caption(
+                "挑一位进入「Ⅱ 导师档案」做深度研究（会去学术库检索并核对他的论文）；"
+                "每位做完后都会存进「Ⅵ 研究档案」，可以在那里并排比较研究结果。"
+            )
+            target_label = st.selectbox(
+                "选择要深入研究的导师", list(labels), key="direction_target"
+            )
+            if st.button("用这位导师开始研究 →", type="primary"):
+                from advisor_fit.models.advisor import Advisor as _Advisor
+
+                target = hits[labels[target_label]]
+                _fill_professor_from_advisor(_Advisor(**target["advisor"]))
+                _navigate("professor")
+                st.rerun()
+        elif "direction_hits" in st.session_state:
+            st.warning("没有找到匹配的导师。可以换更通用的词（例如「机器学习」而不是具体课题），或把学校范围留空。")
     st.stop()
 
 if active_page == "history":

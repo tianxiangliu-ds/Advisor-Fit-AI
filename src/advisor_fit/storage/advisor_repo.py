@@ -363,6 +363,66 @@ class AdvisorRepository:
             rows = conn.execute(sql, params).fetchall()
         return [self._row_to_advisor(row) for row in rows]
 
+    def lookup(self, name: str, university: str | None = None) -> list[Advisor]:
+        """按姓名精确查（学校可选，双向子串），用于"输入姓名+学校自动带出资料"。"""
+        target = (name or "").strip()
+        if not target:
+            return []
+        with closing(self._connect()) as conn:
+            rows = conn.execute(
+                "SELECT * FROM advisors WHERE name = ? ORDER BY university, department",
+                (target,),
+            ).fetchall()
+        records = [self._row_to_advisor(row) for row in rows]
+        if university and university.strip():
+            wanted = university.strip()
+            filtered = [
+                item for item in records if wanted in item.university or item.university in wanted
+            ]
+            if filtered:
+                return filtered
+            # 学校对不上时不要假装没有这个人：返回全部同名，交给用户核对
+        return records
+
+    def search_by_terms(
+        self,
+        terms: list[str],
+        *,
+        universities: list[str] | None = None,
+        limit: int = 400,
+    ) -> list[Advisor]:
+        """按研究方向关键词在库里粗筛（SQL LIKE 先收窄，排序交给上层做）。
+
+        这一层只负责"别漏"，所以命中任何字段（研究方向/研究领域/院系/代表论文/简介）
+        都留下来；"谁更相关"由 `analysis/direction_search.py` 打分排序。
+        """
+        cleaned = [term.replace("%", "").replace("_", "").strip() for term in terms]
+        cleaned = [term for term in dict.fromkeys(cleaned) if term]
+        if not cleaned:
+            return []
+
+        clauses: list[str] = []
+        params: list[str] = []
+        for term in cleaned:
+            pattern = f"%{term}%"
+            clauses.append(
+                "(research_directions LIKE ? OR research_areas LIKE ? OR department LIKE ?"
+                " OR publications LIKE ? OR profile_text LIKE ?)"
+            )
+            params.extend([pattern] * 5)
+        sql = "SELECT * FROM advisors WHERE (" + " OR ".join(clauses) + ")"
+        wanted = [university.strip() for university in (universities or []) if university.strip()]
+        if wanted:
+            placeholders = ", ".join("?" * len(wanted))
+            sql += f" AND university IN ({placeholders})"
+            params.extend(wanted)
+        sql += " LIMIT ?"
+        params.append(str(max(1, limit)))
+
+        with closing(self._connect()) as conn:
+            rows = conn.execute(sql, params).fetchall()
+        return [self._row_to_advisor(row) for row in rows]
+
     def all_advisors(self) -> list[Advisor]:
         with closing(self._connect()) as conn:
             rows = conn.execute("SELECT * FROM advisors").fetchall()

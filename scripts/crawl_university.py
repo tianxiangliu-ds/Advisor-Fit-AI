@@ -35,7 +35,12 @@ sys.path.insert(0, str(ROOT / "src"))
 
 from advisor_fit.config import settings  # noqa: E402
 from advisor_fit.ingest.cv import looks_like_chinese_name  # noqa: E402
-from advisor_fit.ingest.faculty import build_client, extract_links, fetch_html  # noqa: E402
+from advisor_fit.ingest.faculty import (  # noqa: E402
+    build_client,
+    extract_links,
+    fetch_html,
+    fetch_html_rendered,
+)
 from advisor_fit.ingest.homepage import html_to_text  # noqa: E402
 from advisor_fit.ingest.supervisor_roster import RosterEntry  # noqa: E402
 from advisor_fit.storage.roster_repo import RosterRepository  # noqa: E402
@@ -62,6 +67,37 @@ UNIVERSITIES: dict[str, str] = {
     "同济大学": "https://www.tongji.edu.cn/",
     "电子科技大学": "https://www.uestc.edu.cn/",
     "重庆大学": "https://www.cqu.edu.cn/",
+    # ---- 以下为扩到 top50 新增的 30 所 ----
+    "南京大学": "https://www.nju.edu.cn/",
+    "复旦大学": "https://www.fudan.edu.cn/",
+    "中山大学": "https://www.sysu.edu.cn/",
+    "哈尔滨工业大学": "https://www.hit.edu.cn/",
+    "北京师范大学": "https://www.bnu.edu.cn/",
+    "南开大学": "https://www.nankai.edu.cn/",
+    "山东大学": "https://www.sdu.edu.cn/",
+    "厦门大学": "https://www.xmu.edu.cn/",
+    "吉林大学": "https://www.jlu.edu.cn/",
+    "湖南大学": "https://www.hnu.edu.cn/",
+    "东北大学": "https://www.neu.edu.cn/",
+    "兰州大学": "https://www.lzu.edu.cn/",
+    "西北工业大学": "https://www.nwpu.edu.cn/",
+    "西北农林科技大学": "https://www.nwsuaf.edu.cn/",
+    "中国农业大学": "https://www.cau.edu.cn/",
+    "北京理工大学": "https://www.bit.edu.cn/",
+    "北京交通大学": "https://www.bjtu.edu.cn/",
+    "北京科技大学": "https://www.ustb.edu.cn/",
+    "华北电力大学": "https://www.ncepu.edu.cn/",
+    "南京航空航天大学": "https://www.nuaa.edu.cn/",
+    "南京理工大学": "https://www.njust.edu.cn/",
+    "华东师范大学": "https://www.ecnu.edu.cn/",
+    "华东理工大学": "https://www.ecust.edu.cn/",
+    "上海大学": "https://www.shu.edu.cn/",
+    "苏州大学": "https://www.suda.edu.cn/",
+    "郑州大学": "https://www.zzu.edu.cn/",
+    "武汉理工大学": "https://www.whut.edu.cn/",
+    "华中师范大学": "https://www.ccnu.edu.cn/",
+    "华中农业大学": "https://www.hzau.edu.cn/",
+    "暨南大学": "https://www.jnu.edu.cn/",
 }
 
 # 「院系设置」入口页的常见叫法
@@ -108,6 +144,60 @@ class CollegeResult:
     list_url: str = ""
     names: list[str] = field(default_factory=list)
     note: str = ""
+
+
+_JS_ENABLED = False
+
+
+GENERIC_UNIT_NAMES = {
+    "学院", "学院（系）", "学院(系)", "院系", "教学单位", "教学科研单位", "教学机构",
+    "院系设置", "组织机构", "直属单位", "科研机构", "研究机构",
+}
+
+
+def _expand_generic_entries(
+    colleges: list[tuple[str, str]], *, client=None, timeout: float = 20.0
+) -> list[tuple[str, str]]:
+    """有些学校「学院（系）」本身是个列表页，需要再展开一层才是真正的学院。"""
+    expanded: list[tuple[str, str]] = []
+    seen = {name for name, _ in colleges}
+    for name, url in colleges:
+        if name not in GENERIC_UNIT_NAMES and "/list." not in url:
+            expanded.append((name, url))
+            continue
+        try:
+            # 这类"列表页"通常靠 JS 加载，直接上渲染
+            html = _fetch(url, client=client, timeout=timeout, js=True)
+        except Exception:  # noqa: BLE001
+            continue
+        for sub_name, sub_url in _college_links(html, url):
+            if sub_name in seen or sub_name in GENERIC_UNIT_NAMES:
+                continue
+            seen.add(sub_name)
+            expanded.append((sub_name, sub_url))
+    return expanded or colleges
+
+
+def _fetch(url: str, *, client=None, timeout: float = 20.0, js: bool = False) -> str:
+    """取网页。js=True 时用浏览器渲染（应对 JS 动态页），否则走普通请求。"""
+    if js or _JS_ENABLED:
+        return fetch_html_rendered(url, timeout=max(timeout, 30.0))
+    return fetch_html(url, client=client, timeout=timeout)
+
+
+def _fetch_with_fallback(url: str, *, client=None, timeout: float = 20.0) -> str:
+    """先普通抓取；如果拿到的是"空壳"（正文和链接都很少），换浏览器渲染重试一次。"""
+    html = ""
+    try:
+        html = _fetch(url, client=client, timeout=timeout)
+        if len(html_to_text(html)) >= 200 and len(extract_links(html, url)) >= 5:
+            return html
+    except Exception:  # noqa: BLE001 - 普通抓取失败就走渲染
+        html = ""
+    try:
+        return _fetch(url, client=client, timeout=timeout, js=True)
+    except Exception:  # noqa: BLE001
+        return html
 
 
 def _norm(url: str, base: str) -> str:
@@ -165,14 +255,14 @@ def discover_colleges(
     ② 依次尝试首页里所有像「院系设置」的入口，取效果最好的一个；
     ③ 还不行就从「学校概况」这类页面再找一层。
     """
-    home_html = fetch_html(home, client=client, timeout=timeout)
+    home_html = _fetch_with_fallback(home, client=client, timeout=timeout)
     best = _college_links(home_html, home)
     if len(best) >= 5:
         return best
 
     for url in candidate_dir_urls(home_html, home)[:6]:
         try:
-            html = fetch_html(url, client=client, timeout=timeout)
+            html = _fetch_with_fallback(url, client=client, timeout=timeout)
         except Exception:  # noqa: BLE001 - 单个入口失败就试下一个
             continue
         links = _college_links(html, url)
@@ -190,12 +280,12 @@ def discover_colleges(
         if not any(key in text for key in OVERVIEW_KEYS):
             continue
         try:
-            overview_html = fetch_html(link["href"], client=client, timeout=timeout)
+            overview_html = _fetch_with_fallback(link["href"], client=client, timeout=timeout)
         except Exception:  # noqa: BLE001
             continue
         for url in candidate_dir_urls(overview_html, link["href"])[:4]:
             try:
-                html = fetch_html(url, client=client, timeout=timeout)
+                html = _fetch_with_fallback(url, client=client, timeout=timeout)
             except Exception:  # noqa: BLE001
                 continue
             links = _college_links(html, url)
@@ -203,13 +293,13 @@ def discover_colleges(
                 best = links
         if len(best) >= 3:
             break
-    return best
+    return _expand_generic_entries(best, client=client, timeout=timeout)
 
 
 def find_faculty_page(college_url: str, *, client=None, timeout: float = 20.0) -> str:
     """在学院主页里找「师资队伍」入口。"""
     try:
-        html = fetch_html(college_url, client=client, timeout=timeout)
+        html = _fetch_with_fallback(college_url, client=client, timeout=timeout)
     except Exception:  # noqa: BLE001 - 单个学院失败不影响整体
         return ""
     links = extract_links(html, college_url)
@@ -262,7 +352,7 @@ def crawl_college(
     result.list_url = list_url
     try:
         time.sleep(delay)
-        html = fetch_html(list_url, client=client, timeout=timeout)
+        html = _fetch_with_fallback(list_url, client=client, timeout=timeout)
     except Exception as exc:  # noqa: BLE001
         result.note = f"抓师资页失败：{type(exc).__name__}"
         return result
@@ -276,7 +366,7 @@ def crawl_college(
                 continue
             try:
                 time.sleep(delay)
-                sub_html = fetch_html(link["href"], client=client, timeout=timeout)
+                sub_html = _fetch_with_fallback(link["href"], client=client, timeout=timeout)
             except Exception:  # noqa: BLE001
                 continue
             sub_names = extract_names(sub_html, link["href"])
@@ -394,7 +484,14 @@ def main() -> int:
     parser.add_argument("--discover-only", action="store_true")
     parser.add_argument("--delay", type=float, default=1.0, help="每次请求间隔秒数")
     parser.add_argument("--max-colleges", type=int, default=0)
+    parser.add_argument(
+        "--js", action="store_true",
+        help="强制用浏览器渲染取页（应对 JS 动态站点，较慢）",
+    )
     args = parser.parse_args()
+
+    global _JS_ENABLED
+    _JS_ENABLED = args.js
 
     if args.only:
         wanted = [name.strip() for name in args.only.split(",") if name.strip()]

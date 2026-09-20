@@ -174,6 +174,21 @@ uv sync --group crawl
 > pytest 的临时目录固定在项目内 `.tmp/`（由仓库根目录的 `conftest.py` 适配 DSH Windows 沙箱：
 > 每次运行用全新子目录，并把临时目录权限位从 `0o700` 放宽为 `0o777`）。
 > 运行测试时请把输出**重定向到文件**而不是用管道，否则可能被解释器退出阶段的清理报错干扰。
+>
+> ```powershell
+> .\.venv\Scripts\python.exe -m pytest -q > data\pt.log 2>&1
+> Select-String -Path data\pt.log -Pattern 'passed|failed'
+> ```
+
+## 一键验证新增能力
+
+不联网、不调用 LLM，自己逐项打印「预期 / 实际 / 结论」，全部通过时退出码为 0：
+
+```powershell
+.\.venv\Scripts\python.exe scripts\verify_features.py
+```
+
+覆盖五块：抓取守规矩（robots / 限速 / 重试）、网页缓存（保质期）、字段级补齐、身份核对、导师名册。
 
 消歧评测数据在 `evals/disambiguation_golden.jsonl`：每个导师配一组「应命中/应排除」候选论文，量化消歧 precision/recall/F1。用 `scripts/fetch_golden_candidates.py` 抓取真实候选后，按你的领域知识补充标注即可扩充（当前为起始集，约 10 位导师、150 篇候选）。
 

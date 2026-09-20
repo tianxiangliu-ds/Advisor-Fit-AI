@@ -46,6 +46,9 @@ class TraceStep(BaseModel):
 
 class RunTrace(BaseModel):
     task: str = ""
+    # 这次运行是哪种模式：agent（大模型决策）| rule（未配模型时的确定性规则路径）。
+    # 界面据此决定措辞——规则路径没有"模型可选工具"这回事，不能假装有。
+    mode: str = "agent"
     # 这次运行**提供给模型**的工具清单（名称 / 说明 / 参数 schema / 权限）。
     # 只记"实际调用了什么"是不够的——看不出 Agent 当时有哪些选择，也就无法复盘
     # "它为什么没选另一个工具"。

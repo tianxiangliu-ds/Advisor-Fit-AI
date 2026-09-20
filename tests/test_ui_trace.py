@@ -10,7 +10,9 @@ from __future__ import annotations
 from advisor_fit.ui_trace import (
     format_duration,
     has_content,
+    is_rule_mode,
     trace_degraded_html,
+    trace_mode_note,
     trace_overview,
     trace_panel_html,
     trace_step_html,
@@ -122,3 +124,54 @@ def test_has_content_is_false_before_any_run():
     assert has_content({"steps": [], "tools": []}) is False
     assert has_content({"steps": [{"index": 0}]}) is True
     assert has_content({"tools": [{"name": "x"}]}) is True
+
+
+# -- 规则模式（没配大模型） ----------------------------------------------------
+
+
+RULE_TRACE = {
+    "task": "检索导师「陆伟」的候选论文",
+    "mode": "rule",
+    "tools": [],
+    "steps": [
+        {"index": 0, "kind": "tool_call", "name": "search_by_author",
+         "args_digest": "institution=武汉大学&name=陆伟", "status": "ok",
+         "duration_ms": 900, "summary": "count=25"},
+        {"index": 1, "kind": "done", "name": "rule_pipeline", "status": "ok",
+         "summary": "papers=25（规则路径，未使用大模型）"},
+    ],
+    "budget": {"steps": 2, "tokens": 0, "external_calls": 1, "elapsed_seconds": 1.4},
+}
+
+
+def test_rule_mode_is_detected():
+    assert is_rule_mode(RULE_TRACE) is True
+    assert is_rule_mode(SAMPLE_TRACE) is False
+    assert is_rule_mode({}) is False
+
+
+def test_rule_mode_hides_the_tool_count():
+    """没有模型就谈不上"提供了哪些工具"；显示 0 会和"工具调用 2 次"自相矛盾。"""
+    labels = [label for label, _ in trace_overview(RULE_TRACE)]
+
+    assert "TOOLS" not in labels
+    assert "TOOL CALLS" in labels
+    assert dict(trace_overview(RULE_TRACE))["TOOL CALLS"] == "1"
+
+
+def test_agent_mode_still_shows_the_tool_count():
+    labels = [label for label, _ in trace_overview(SAMPLE_TRACE)]
+
+    assert "TOOLS" in labels
+
+
+def test_rule_mode_note_says_no_model_was_involved():
+    note = trace_mode_note(RULE_TRACE)
+
+    assert "未配置大模型" in note
+    assert "确定性规则路径" in note
+    assert "没有模型参与决策" in note
+
+
+def test_agent_mode_has_no_rule_note():
+    assert trace_mode_note(SAMPLE_TRACE) == ""

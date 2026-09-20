@@ -33,7 +33,11 @@ def format_duration(ms: int) -> str:
 
 
 def trace_overview(trace: dict[str, Any]) -> list[tuple[str, str]]:
-    """概览行的数字：步数 / 工具数 / 工具调用 / 耗时 / token / 外部请求。"""
+    """概览行的数字：步数 / 工具数 / 工具调用 / 耗时 / token / 外部请求。
+
+    规则模式（没配大模型）不显示「工具数」——没有模型就谈不上"提供了哪些工具"，
+    显示 0 会让旁边"工具调用 3 次"看起来自相矛盾。
+    """
     steps = trace.get("steps") or []
     tools = trace.get("tools") or []
     budget = trace.get("budget") or {}
@@ -45,14 +49,37 @@ def trace_overview(trace: dict[str, Any]) -> list[tuple[str, str]]:
         elapsed_text = format_duration(
             sum(int(step.get("duration_ms") or 0) for step in steps)
         )
-    return [
-        ("STEPS", str(len(steps))),
-        ("TOOLS", str(len(tools))),
+    overview = [("STEPS", str(len(steps)))]
+    if not is_rule_mode(trace):
+        overview.append(("TOOLS", str(len(tools))))
+    overview.extend([
         ("TOOL CALLS", str(tool_calls)),
         ("ELAPSED", elapsed_text),
         ("TOKENS", str(budget.get("tokens", 0))),
         ("NETWORK", str(budget.get("external_calls", 0))),
-    ]
+    ])
+    return overview
+
+
+def is_rule_mode(trace: dict[str, Any]) -> bool:
+    """这次运行是不是"没配大模型"的确定性规则路径。"""
+    return str(trace.get("mode") or "agent") == "rule"
+
+
+def trace_mode_note(trace: dict[str, Any]) -> str:
+    """规则模式的说明。
+
+    必须说清楚：下面这些步骤是**真的**发生的检索，只是由固定流程而非模型决策驱动。
+    否则用户会以为"这就是 Agent 在思考"，那是误导。
+    """
+    if not is_rule_mode(trace):
+        return ""
+    return (
+        "本次未配置大模型，走的是**确定性规则路径**：按「机构 → 备选机构 → 代表论文标题」"
+        "依次检索，再由机构规则做消歧。下面是它真实执行的每一步——但这次没有模型参与决策，"
+        "所以不显示「可用工具数」。配上 LLM_API_KEY 后，同样的界面上会看到模型自己决定"
+        "调哪个工具、如何扩搜的过程。"
+    )
 
 
 def trace_step_html(step: dict[str, Any]) -> str:

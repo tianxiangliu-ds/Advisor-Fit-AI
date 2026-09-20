@@ -11,6 +11,7 @@
 from __future__ import annotations
 
 import inspect
+import time
 from collections import Counter
 from dataclasses import dataclass, field
 
@@ -23,7 +24,7 @@ from advisor_fit.agents.tools import (
 )
 from advisor_fit.harness.budget import BudgetTracker
 from advisor_fit.harness.loop import run_loop
-from advisor_fit.harness.trace import RunTrace
+from advisor_fit.harness.trace import RunTrace, digest_args
 from advisor_fit.llm.prompts import prompt_text
 from advisor_fit.llm.provider import NullLLM
 from advisor_fit.providers.academic import Work
@@ -486,32 +487,56 @@ def _research_without_llm(
         if budget is not None and not self_counting:
             budget.record_external_call("external")
 
+    if trace is not None:
+        # 规则路径没有模型决策，不能假装有；但**它真的调用了哪些检索要如实记**。
+        # 否则没配 Key 的演示站上，访客点完「一键研究」看到的轨迹区几乎是空的。
+        trace.mode = "rule"
+
+    def _record(tool: str, args: dict, count: int, started: float) -> None:
+        if trace is None:
+            return
+        trace.add(
+            kind="tool_call",
+            name=tool,
+            args_digest=digest_args(args),
+            status="ok",
+            duration_ms=int((time.monotonic() - started) * 1000),
+            summary=f"count={count}",
+        )
+
     papers: list[dict] = []
     for inst in (search_institution, institution):
         if not inst:
             continue
         _count()
+        started = time.monotonic()
         works = provider.search_publications(
             name,
             **_supported_kwargs(
                 provider, institution=inst, source=source or "auto", discipline=discipline
             ),
         )
+        _record("search_by_author", {"name": name, "institution": inst}, len(works), started)
         papers.extend(work_to_paper(work) for work in works)
     if len(papers) < 3:
         for title in (seed_titles or [])[:5]:
             _count()
+            started = time.monotonic()
             works = provider.search_by_title(
                 title,
                 **_supported_kwargs(provider, source=source or "auto", discipline=discipline),
             )
             if not works:
                 works = crossref.search_by_title(title)
+            _record("search_by_title", {"title": title}, len(works), started)
             papers.extend(work_to_paper(work) for work in works)
     papers = _dedupe_papers(papers)
     _rule_disambiguate(papers, institution)
     if trace is not None:
-        trace.add(kind="done", name="no_llm_pipeline", summary=f"papers={len(papers)}")
+        trace.add(
+            kind="done", name="rule_pipeline",
+            summary=f"papers={len(papers)}（规则路径，未使用大模型）",
+        )
         if budget is not None:
             trace.budget = budget.snapshot()
     return ResearchResult(papers=papers, trace=trace)

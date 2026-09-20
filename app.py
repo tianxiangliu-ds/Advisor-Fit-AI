@@ -333,6 +333,9 @@ def _render_agent_trace(trace: dict | None) -> None:
 
     st.markdown('<div class="section-note">AGENT TRACE / 本次 Agent 运行轨迹</div>',
                 unsafe_allow_html=True)
+    mode_note = ui_trace.trace_mode_note(trace)
+    if mode_note:
+        st.info(mode_note)
     st.caption("这次运行里 Harness 记下的每一步：模型做了什么决定、调用了哪个工具、结果如何。"
                "参数与结果只保留摘要。")
     st.markdown(ui_trace.trace_panel_html(trace), unsafe_allow_html=True)

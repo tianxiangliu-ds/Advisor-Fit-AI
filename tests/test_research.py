@@ -302,3 +302,27 @@ def test_research_without_llm_falls_back_to_titles():
         seed_titles=["某代表论文"],
     )
     assert any("标题匹配" in p["title"] for p in result.papers)
+
+
+def test_rule_path_records_real_steps_in_the_trace():
+    """没配大模型时，规则路径也要如实记下它调用了什么。
+
+    否则公开演示站（没有 API Key）上，访客点完「一键研究」看到的轨迹区几乎是空的——
+    而那恰恰是最该展示的部分。
+    """
+    from advisor_fit.harness.trace import RunTrace
+
+    provider = FakeProvider([FakeWork("一篇论文", institution="武汉大学")])
+    trace = RunTrace(task="t")
+    research_professor(
+        NullLLM(), provider, name="陆伟", institution="武汉大学", source="zh",
+        seed_titles=["一篇论文"], trace=trace,
+    )
+
+    assert trace.mode == "rule"
+    tool_steps = [s for s in trace.steps if s.kind == "tool_call"]
+    assert tool_steps, "规则路径必须记下真实的检索步骤"
+    assert {s.name for s in tool_steps} <= {"search_by_author", "search_by_title"}
+    assert all(s.summary.startswith("count=") for s in tool_steps)
+    # 没有模型就没有"可用工具清单"
+    assert trace.tools == []

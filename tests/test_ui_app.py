@@ -210,3 +210,18 @@ def test_unconfirmed_paper_cannot_generate_report(tmp_path, monkeypatch):
     assert not app.exception
     assert app.session_state["result"] is None
     assert any("请至少勾选确认一篇论文" in item.value for item in app.error)
+
+
+def test_field_report_shows_missing_fields_without_blocking(tmp_path, monkeypatch):
+    """只填姓名+学校也能看到字段清单：缺的标"未知"，不卡住流程。"""
+    app = _app(tmp_path, monkeypatch)
+    next(button for button in app.button if "导师档案" in button.label).click().run()
+    next(item for item in app.text_input if item.label == "导师姓名（必填）").set_value("陆伟")
+    next(item for item in app.text_input if item.label == "学校/单位（必填）").set_value("武汉大学")
+    app.run()
+    next(button for button in app.button if "检查信息补齐情况" in button.label).click().run()
+
+    assert not app.exception
+    assert any("导师信息补齐情况" in item.value for item in app.markdown)
+    assert any("请手动补充" in item.value for item in app.markdown)
+    assert any("已获取 2/6 个字段" in item.value for item in app.caption)

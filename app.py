@@ -26,12 +26,14 @@ from advisor_fit.ingest.cv import (
     extract_pdf_text,
 )
 from advisor_fit.ingest.cv_llm import build_student_profile_llm
-from advisor_fit.ingest.homepage import extract_homepage_profile
+from advisor_fit.ingest.fetch import Fetcher
+from advisor_fit.ingest.homepage import html_to_text, parse_homepage_html
 from advisor_fit.ingest.manual_professor import (
     ManualPaperInput,
     ManualProfessorInput,
     validate_paper_values,
 )
+from advisor_fit.ingest.profile_fallback import REQUIRED_FIELDS, build_field_report
 from advisor_fit.llm.provider import NullLLM, build_llm
 from advisor_fit.manual_pipeline import run_manual_pipeline
 from advisor_fit.providers.wanfang import WanfangProvider
@@ -55,7 +57,7 @@ _PROFESSOR_STATE_KEYS = (
     "prof_interests", "prof_homepage", "prof_english_name", "prof_search_institution",
     "prof_seed_titles", "_faculty_directions", "_faculty_seed_titles",
     "candidate_papers", "_research_confirm", "_research_steps", "_research_granted",
-    "_research_degraded",
+    "_research_degraded", "field_report",
     "result", "identity_confirmed", "paper_read_confirmed", "run_label",
     "manual_paper_count",
 )
@@ -243,6 +245,53 @@ def _lookup_faculty(name: str, institution: str) -> list:
         return _faculty_repo().lookup(name, institution or None)
     except Exception:  # noqa: BLE001 - 导师库缺失/损坏不影响检索
         return []
+
+
+def _manual_professor_fields() -> dict[str, str]:
+    """把用户在导师页已经填好的字段收集起来，作为"补齐"的最高优先级来源。"""
+    return {
+        "name": st.session_state.get("prof_name", ""),
+        "institution": st.session_state.get("prof_institution", ""),
+        "department": st.session_state.get("prof_department", ""),
+        "title": st.session_state.get("prof_title", ""),
+        "email": st.session_state.get("prof_email", ""),
+        "declared_interests": st.session_state.get("prof_interests", ""),
+    }
+
+
+_FIELD_STATUS_BADGES = {
+    "CONFIRMED": "✅ 已确认",
+    "INFERRED": "🟡 待核对",
+    "UNKNOWN": "⚪ 未知",
+}
+
+
+def _render_field_report(report) -> None:
+    """把「哪些字段拿到了、从哪来、还缺什么」摊开给用户看；缺字段不阻塞流程。"""
+    with st.container(border=True):
+        st.markdown('<div class="section-note">FIELD STATUS / 导师信息补齐情况</div>',
+                    unsafe_allow_html=True)
+        st.caption(report.summary())
+        for entry in report.fields.values():
+            badge = _FIELD_STATUS_BADGES.get(entry.status.value, entry.status.value)
+            if entry.known:
+                st.markdown(
+                    f"**{entry.label}**　{entry.value}　·　{badge}　·　来源：{entry.source}"
+                )
+                if entry.note:
+                    st.caption(entry.note)
+            else:
+                st.markdown(f"**{entry.label}**　—　·　{badge}　·　请手动补充")
+        for note in report.notes:
+            st.caption(note)
+        missing = report.missing_required(REQUIRED_FIELDS)
+        if missing:
+            labels = "、".join(report.get(name).label for name in missing)
+            st.warning(f"还缺必填项：{labels}（补齐后才能继续下一步）")
+        else:
+            st.caption("必填项已齐，可以继续；其余字段留空不影响后续流程。")
+        if report.source_url:
+            st.caption(f"抓取来源：{report.source_url}")
 
 
 def _set_all_candidates(confirmed: bool, *, matching_only: bool = False) -> None:
@@ -778,9 +827,19 @@ if active_page == "professor":
         if not url:
             st.error("请先填写主页链接")
         else:
+            # 先记下你此刻已经填好的字段：它们优先级最高，且来源要如实标注
+            manual_before = _manual_professor_fields()
+            fetched = None
+            profile = None
             try:
                 with st.spinner("正在解析主页…"):
-                    profile = extract_homepage_profile(url, _llm())
+                    fetched = Fetcher().fetch(url)
+                    if fetched.ok:
+                        profile = parse_homepage_html(fetched.text, _llm())
+            except Exception as exc:  # noqa: BLE001 - 任何异常都降级为"按已填字段生成清单"
+                st.info(f"主页解析遇到问题（{exc}），已改为按你填写的字段生成清单。")
+
+            if profile is not None:
                 if profile.name:
                     st.session_state["prof_name"] = profile.name
                 if profile.institution:
@@ -800,8 +859,20 @@ if active_page == "professor":
                     st.session_state["_research_granted"] = []
                     st.session_state["_auto_search"] = True
                 st.success("已解析主页，字段已填入下方表格，请核对后继续。")
-            except Exception as exc:  # noqa: BLE001 - 解析失败降级到手动录入
-                st.error(f"主页解析失败（不影响手动录入）：{exc}")
+            elif fetched is not None and not fetched.ok:
+                st.info(
+                    f"这个页面没抓到（{fetched.friendly_error()}）。"
+                    "已按你填写的姓名/学校生成字段清单，缺的部分手动补充即可。"
+                )
+
+            html = fetched.text if (fetched is not None and fetched.ok) else ""
+            st.session_state["field_report"] = build_field_report(
+                manual=manual_before,
+                homepage_html=html,
+                page_text=html_to_text(html) if html else "",
+                llm_profile=profile,
+                source_url=url,
+            )
 
     left, right = st.columns(2)
     with left:
@@ -818,6 +889,15 @@ if active_page == "professor":
                                      key="identity_confirmed")
     paper_read_confirmed = st.checkbox("我已阅读以上论文（可选，允许邮件提及）",
                                        key="paper_read_confirmed")
+
+    if st.button("📋 检查信息补齐情况",
+                 help="不联网，只看你已填的字段哪些已确认、哪些还缺"):
+        st.session_state["field_report"] = build_field_report(
+            manual=_manual_professor_fields()
+        )
+
+    if st.session_state.get("field_report") is not None:
+        _render_field_report(st.session_state["field_report"])
 
     if st.button("🔍 从导师库填充", help="在已采集的高校导师库中按姓名+学校查找并自动填充"):
         matches = _lookup_faculty(professor_name, institution)

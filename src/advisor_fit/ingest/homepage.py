@@ -126,6 +126,11 @@ def parse_homepage(text: str, llm, *, title: str = "") -> HomepageProfile:
     return output
 
 
+def parse_homepage_html(html: str, llm) -> HomepageProfile:
+    """从一段 HTML 直接解析（含标题推断），供需要同时拿原始 HTML 的调用方使用。"""
+    return parse_homepage(html_to_text(html), llm, title=extract_title(html))
+
+
 def extract_homepage_profile(
     url: str, llm, *, fetcher: Fetcher | None = None
 ) -> HomepageProfile:
@@ -137,6 +142,4 @@ def extract_homepage_profile(
     result = (fetcher or Fetcher()).fetch(url)
     if not result.ok:
         raise RuntimeError(result.friendly_error())
-    title = extract_title(result.text)
-    text = html_to_text(result.text)
-    return parse_homepage(text, llm, title=title)
+    return parse_homepage_html(result.text, llm)

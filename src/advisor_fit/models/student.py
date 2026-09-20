@@ -63,6 +63,3 @@ class StudentProfile(BaseModel):
 
     def confirmed_fact_ids(self) -> set[str]:
         return {f.id for f in self.draftable_facts()}
-
-    def all_fact_ids(self) -> set[str]:
-        return {f.id for f in self.facts}

@@ -1,7 +1,7 @@
 """批量采集高校导师信息到导师库。
 
 用法：
-    python scripts/crawl_faculty.py                # 静态抓取（数据源 data/faculty_seed.json）
+    python scripts/crawl_faculty.py                # 静态抓取（数据源 seeds/faculty_seed.json）
     python scripts/crawl_faculty.py --js           # 用 Playwright 渲染 JS 页面
     python scripts/crawl_faculty.py --limit 20     # 每个学院最多采 20 位
 

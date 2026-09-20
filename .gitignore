@@ -31,5 +31,8 @@ venv/
 .vscode/
 .DS_Store
 
+# 本地 Agent 工具的记忆目录（非项目产物）
+.workbuddy-ai/
+
 # UI 参考设计截图（用户本地素材）
 UI_design/

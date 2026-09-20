@@ -2,15 +2,13 @@
 .env
 *.env.local
 
-# 本地数据与上传
+# 本地数据库与上传件
 data/
 uploads/
+exports/
 *.sqlite
 *.sqlite3
 *.db
-
-# 导出产物（含真实 CV / 报告，不入库）
-exports/
 
 # Python
 __pycache__/
@@ -23,10 +21,14 @@ venv/
 .ruff_cache/
 .mypy_cache/
 
-# pytest 临时目录（必须留在项目内，见 pyproject.toml 说明）
-# 通过 .tmp/.gitkeep 让目录随仓库存在：pytest 不会创建父目录
+# pytest 临时目录（必须留在项目内，见 conftest.py）
+# 通过 .tmp/.gitkeep 让目录随仓库存在；pytest 不会创建父目录
 .tmp/*
 !.tmp/.gitkeep
+
+# UI 测试留下的临时目录（沙箱下权限受限，内容无需入库）
+tests/.ui-test-temp/
+tests/.ui-full-test-temp/
 
 # 真实上传文件（测试只允许匿名 fixtures）
 *.pdf
@@ -41,3 +43,5 @@ venv/
 
 # UI 参考设计截图（用户本地素材）
 UI_design/
+
+# 导师数据采集与建库工具已独立到 ../advisor-fit-crawl/，本仓库不再包含爬取脚本

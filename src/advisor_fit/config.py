@@ -6,9 +6,23 @@ from pathlib import Path
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+# 项目根目录：src/advisor_fit/config.py -> 上溯三层。
+#
+# 为什么要把路径固定成绝对路径，而不是用 Path("data")：
+# 相对路径是**跟着启动目录走**的。爬取工具单独放在另一个文件夹后，如果从那边启动，
+# `data/advisors.db` 就会落到爬取文件夹里，而 App 从产品目录启动时读的是产品目录下的
+# 那一份——两边悄悄读不同的库，是最难查的一类 bug。
+_PROJECT_ROOT = Path(__file__).resolve().parents[2]
+# 装成 wheel 后 __file__ 在 site-packages 里，上溯不到项目根；这时退回按启动目录找。
+_ROOT = _PROJECT_ROOT if (_PROJECT_ROOT / "pyproject.toml").exists() else Path.cwd()
+
 
 class Settings(BaseSettings):
-    model_config = SettingsConfigDict(env_file=".env", extra="ignore")
+    # env_file 也必须是绝对路径：否则从爬取文件夹启动时会读不到产品目录下的 .env，
+    # 大模型 Key 就"凭空消失"了。
+    model_config = SettingsConfigDict(
+        env_file=str(_ROOT / ".env"), env_file_encoding="utf-8", extra="ignore"
+    )
 
     llm_provider: str = "deepseek"  # deepseek | openai | anthropic | ollama
     llm_api_key: str = ""
@@ -23,9 +37,9 @@ class Settings(BaseSettings):
     # 可选：进入 OpenAlex / Crossref 的「礼貌池」用的联系邮箱，留空也能用
     contact_email: str = ""
 
-    data_dir: Path = Path("data")
-    uploads_dir: Path = Path("uploads")
-    exports_dir: Path = Path("exports")
+    data_dir: Path = _ROOT / "data"
+    uploads_dir: Path = _ROOT / "uploads"
+    exports_dir: Path = _ROOT / "exports"
 
 
 settings = Settings()

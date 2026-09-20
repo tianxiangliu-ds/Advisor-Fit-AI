@@ -4,6 +4,32 @@
 
 > 原始自动抓取 MVP 保存在 Git 标签 `v0`。当前工作区为 v0.1 人工证据输入版。
 
+## 项目结构：产品与采集工具分开两个文件夹
+
+本仓库只包含**产品主体**（Streamlit 应用）。导师数据的采集与建库工具是配套的独立项目，
+放在**同级目录** `../advisor-fit-crawl/`：
+
+```
+C:\projects\
+├── advisor-fit-ai\        ← 本仓库：产品主体，可独立运行、可推 GitHub
+│   ├── app.py  src/  tests/  evals/  seeds/  docs/
+│   ├── scripts/           ← 产品自带脚本（自检 / 评测 / 版本检查 / 备份）
+│   └── data/              ← 数据库（advisors.db 等），git 忽略
+└── advisor-fit-crawl\     ← 采集与建库工具（独立仓库）
+    ├── scripts/           ← 11 个爬取脚本
+    ├── data/  logs/  reports/  docs/
+    └── tests/
+```
+
+**为什么要分开**：采集是"把数据做出来"的过程，产品是"用户用的东西"。混在一起会让
+git 仓库被采集脚本污染，项目根目录堆满日志和原始抓取结果。
+
+**两边怎么交接**：只通过**数据库**。采集工具把库写进本仓库的 `data/`，产品读它。
+数据库和 `.env`（大模型 Key）都只有一份，放在本仓库。产品的数据路径已固定为
+**绝对路径**（见 `src/advisor_fit/config.py`），不会因为"从哪个目录启动"而读错库。
+
+采集工具怎么用，见 `../advisor-fit-crawl/README.md`。
+
 ## 为什么改为人工证据输入
 
 中国高校导师主页结构差异大，中文姓名在学术数据库中的消歧也不稳定。v0.1 先解决最核心的问题：不依赖官网抓取、OpenAlex 或 LLM API，也能让一个真实案例完整跑通。
@@ -180,10 +206,13 @@ LLM 配置是可选的，支持多供应商：复制 `.env.example` 为 `.env`�
 - 需要新的色值/字号/间距时：先更新 `design.md`，再改 `src/advisor_fit/ui_theme.py`，最后改页面。不允许出现只用一次的临时样式。
 - `.streamlit/config.toml` 的主题色必须与 `design.md` 的调色板保持一致。
 
-## 导师库建库（按需采集高校导师）
+## 导师库建库（采集工具在 ../advisor-fit-crawl/）
 
 从高校官网批量采集导师档案，写入本地 `data/advisors.db`（全项目唯一的一份导师数据），
 用于「◌ 方向找导师」按研究方向粗筛候选、以及「Ⅱ 导师档案」按姓名+学校自动带出资料。
+
+> **采集脚本不在本仓库**。它们是配套的独立项目 `../advisor-fit-crawl/`，
+> 用法见那边的 `README.md`。这里只说明产品怎么用这份库、以及合规口径。
 
 ### 按方向找导师怎么用
 
@@ -204,18 +233,22 @@ LLM 配置是可选的，支持多供应商：复制 `.env.example` 为 `.env`�
 - 采集必须由用户手动触发，遵守 `robots.txt` 与服务条款，并按域名限速（`--delay`）。定位为个人学习交流用途。
 
 ```powershell
-# 安装可选依赖（渲染 JS 页面）
-uv sync --group crawl
-.\.venv\Scripts\python.exe -m playwright install chromium
+# 采集脚本都在同级目录的独立项目里
+cd ..\advisor-fit-crawl
+$PY = ..\advisor-fit-ai\.venv\Scripts\python.exe
 
-# 静态抓取（数据源 seeds/faculty_seed.json）
-.\.venv\Scripts\python.exe scripts\crawl_faculty.py
+# 先体检：看一所学校每个学院卡在哪一步（排查问题先跑它）
+& $PY scripts\diagnose_school.py --university 天津大学 --limit 10
 
-# JS 渲染抓取（高校师资列表多为 Vue/React 动态加载，需 Playwright）
-.\.venv\Scripts\python.exe scripts\crawl_faculty.py --js --limit 20
+# 抓一所学校（--graduate 只抓确实招研究生的学院；--details 连职称邮箱方向一起采）
+& $PY scripts\crawl_university.py --university 天津大学 --graduate --details
+
+# 批量抓：保持 4 个并行，逐校记账
+& $PY scripts\crawl_batch.py --workers 4
 ```
 
-每条记录含：姓名、学校、学院、职称、主页链接、邮箱、研究领域、研究方向、代表论文。数据源在 `seeds/faculty_seed.json`（top-10 高校 + 已收录学院）；扩充时先在其学院官网找到「师资队伍/教师名录」入口页 URL 加入即可。
+每条记录含：姓名、学校、学院、职称、邮箱、研究方向、主页链接、备注、抓取时间与来源链接。
+详细的脚本清单、踩坑记录与验收标准见 `../advisor-fit-crawl/README.md` 与 `../advisor-fit-crawl/docs/`。
 
 ## 第一次测试建议
 

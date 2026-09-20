@@ -1,4 +1,12 @@
-"""中文姓名判据测试：用于从网页链接里筛导师姓名，滤掉导航词。"""
+"""中文姓名判据测试（**产品侧**）。
+
+分工说明：
+- 这里只测产品自己的判据 `advisor_fit.ingest.cv.looks_like_chinese_name`——
+  它服务于"用户输入的这份中文文本里哪个是姓名"。
+- **网页导航词的完整拦截保证在爬取侧**（`../advisor-fit-crawl/tests/`）。
+  因为要拦住「师资队伍」「武大主页」这类词，得靠爬虫自己的导航词表
+  `NAME_STOPWORDS`；产品不该为了爬虫的需要去背这张表。
+"""
 
 from __future__ import annotations
 
@@ -18,17 +26,14 @@ def test_accepts_real_names(text):
 @pytest.mark.parametrize(
     "text",
     [
-        "学院简介", "师资队伍", "人才培养", "学院概况", "现任领导", "党群工作",
-        "规章制度", "科学研究", "信息公开", "国际交流", "机构设置", "荣休教师",
-        "下页", "尾页", "详细", "字母检索", "系部检索", "博士后", "专职教师",
-        "下载专区", "联系我们", "人才培养", "武大主页", "旧版",
+        "学院简介", "人才培养", "学院概况", "现任领导", "规章制度", "科学研究",
+        "信息公开", "机构设置", "下页", "尾页", "详细", "字母检索", "系部检索",
+        "博士后", "专职教师", "下载专区", "联系我们", "旧版",
     ],
 )
 def test_rejects_navigation_words(text):
-    """这些词的首字有些本身就是姓氏（党/国/武），必须靠爬虫侧的导航词表拦掉。"""
-    from scripts.crawl_university import NAME_STOPWORDS
-
-    assert text in NAME_STOPWORDS or looks_like_chinese_name(text) is False
+    """这些是产品判据自己就能拦下的界面词。"""
+    assert looks_like_chinese_name(text) is False
 
 
 def test_rejects_latin_and_over_four_chars():

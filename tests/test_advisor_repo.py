@@ -27,6 +27,16 @@ def test_merge_fills_only_empty_fields():
     assert "title" not in merged.field_sources
 
 
+def test_merge_replaces_non_url_source_placeholder_only():
+    target = _base(source_url="官网院系师资页", title="教授")
+    extra = _base(source_url="https://sim.whu.edu.cn/info/1549/12919.htm", title="副教授")
+
+    merged = merge_into(target, extra, "official")
+
+    assert merged.source_url == "https://sim.whu.edu.cn/info/1549/12919.htm"
+    assert merged.title == "教授"
+
+
 def test_merge_records_which_source_filled_each_field():
     merged = merge_into(_base(), _base(research_directions=["信息检索"]), "official")
 

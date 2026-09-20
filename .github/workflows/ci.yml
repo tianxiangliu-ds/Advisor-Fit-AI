@@ -20,10 +20,13 @@ jobs:
         run: uv sync --group dev
 
       - name: 代码检查
-        run: uv run ruff check src tests scripts app.py
+        run: uv run ruff check src tests scripts app.py streamlit_app.py
 
       - name: 版本号一致性
         run: uv run python scripts/check_version.py
+
+      - name: 依赖清单一致性（托管平台用的 requirements.txt）
+        run: uv run python scripts/sync_requirements.py --check
 
       - name: 自动测试
         run: uv run pytest -q

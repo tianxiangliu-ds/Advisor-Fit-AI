@@ -20,6 +20,13 @@
 - 新增「◌ 方向找导师」页：研究方向关键词 → 本地导师库粗筛 → 可解释排序 → 并排比较
 - 「从导师库填充」改为优先查统一导师库（3 万条）
 
+**开源发布准备**
+
+- 面向使用者的 README（截图 + 一句话价值 + 快速开始）与可复现的界面截图
+- 数据备份（命令行 + 页面下载）、上传简历清理规则、版本号显示与一致性检查、GitHub CI
+- **在线 Demo 一键部署**：`streamlit_app.py` 演示入口（自动生成全部虚构的演示数据）
+  + `requirements.txt`（从 pyproject 同步）+ `Dockerfile` + Streamlit Community Cloud 说明
+
 **已知限制**（详见 README 的「已知限制」）
 
 - DBLP 已启用 Anubis 反爬校验，默认关闭，计算机领域召回由 OpenAlex 承担

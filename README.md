@@ -63,21 +63,23 @@
 | ![学生事实](screenshots/03-resume.png) | ![导师档案](screenshots/04-professor.png) |
 | ![论文核验](screenshots/05-papers.png) | ![研究档案](screenshots/06-history.png) |
 
-> 截图里的导师、论文、学校**全部是虚构的演示数据**（`scripts/seed_demo_data.py` 生成），
-> 不涉及任何真实人物。想自己重新生成截图：
-> `scripts\seed_demo_data.py` → 用演示数据启动应用 → `scripts\shoot_screenshots.py`。
+> 截图里的导师、论文、学校**全部是虚构的演示数据**（`src/advisor_fit/demo_data.py` 生成），
+> 不涉及任何真实人物。想自己重新生成截图：先按下面「部署在线 Demo」里的方式用演示数据
+> 启动应用，再运行 `scripts\shoot_screenshots.py`。
 
 </details>
 
 ## 快速开始
 
-**只想先看看长什么样**（虚构演示数据，不碰你的真实数据）：
+**只想先看看长什么样**（自动生成虚构演示数据，不碰你的真实数据）：
 
 ```powershell
 uv sync
-.\.venv\Scripts\python.exe scripts\seed_demo_data.py --out data\demo-data
-$env:DATA_DIR="data\demo-data"; .\.venv\Scripts\python.exe -m streamlit run app.py
+.\.venv\Scripts\python.exe -m streamlit run streamlit_app.py
 ```
+
+这个入口会在 `data/demo-data/` 里生成一份**全部虚构**的演示数据（10 位导师 + 2 条研究记录），
+然后启动应用。演示数据和真实数据完全隔离，删掉 `data/demo-data/` 即可重置。
 
 **正常使用**：
 
@@ -98,6 +100,30 @@ uv sync                                  # 安装依赖
 | `CONTACT_EMAIL` | 填入后进入 OpenAlex/Crossref 的"礼貌池"，配额更稳 | 可选 |
 | `WANFANG_APP_KEY` | 补充**中文文献** | 可选 |
 | `AMINER_API_KEY` | AMiner 学者画像（按次计费） | 可选，默认关闭 |
+
+## 部署在线 Demo
+
+想把它挂到网上给别人试（不登录、不存真实数据），仓库里已经备好了配置：
+
+**方式一：Streamlit Community Cloud（免费、最省事）**
+
+1. 把仓库推到 GitHub；
+2. 在 [share.streamlit.io](https://share.streamlit.io) 新建应用，入口文件选 **`streamlit_app.py`**；
+3. 依赖会自动按 `requirements.txt` 安装。**不要配 `.env`** —— 演示站就该是零 Key、零真实数据的。
+
+**方式二：Docker（自托管）**
+
+```powershell
+docker build -t advisor-fit-demo .
+docker run --rm -p 8501:8501 advisor-fit-demo
+```
+
+两条路跑的都是同一个入口：启动时生成虚构演示数据 → 打开就是完整界面。
+
+> **为什么演示站必须走 `streamlit_app.py`**：它把数据目录指向独立的 `data/demo-data/`，
+> 并在首次启动时写入一份带「演示数据」标记的虚构数据。真实数据目录不会被读到，
+> 访问者也不可能看到别人的简历。`requirements.txt` 由 `scripts/sync_requirements.py`
+> 从 `pyproject.toml` 同步，两边不一致时测试会失败。
 
 ## 项目结构：产品与采集工具分开两个文件夹
 
@@ -333,9 +359,10 @@ $PY = ..\advisor-fit-ai\.venv\Scripts\python.exe
 
 ```powershell
 .\.venv\Scripts\python.exe -m pytest -q
-.\.venv\Scripts\python.exe -m ruff check src tests scripts app.py
+.\.venv\Scripts\python.exe -m ruff check src tests scripts app.py streamlit_app.py
 .\.venv\Scripts\python.exe scripts\run_evals.py
 .\.venv\Scripts\python.exe scripts\check_version.py
+.\.venv\Scripts\python.exe scripts\sync_requirements.py --check
 # 消歧评测（需 LLM_API_KEY；--rule 可跑机构规则基线对比）
 .\.venv\Scripts\python.exe scripts\run_disambiguation_evals.py
 ```

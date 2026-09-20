@@ -1,0 +1,16 @@
+# 在线 Demo / 托管平台用的依赖清单。
+#
+# ⚠️ 这份文件是从 pyproject.toml 的 dependencies 同步来的，**不要手改**：
+#    改了之后 `tests/test_demo_deploy.py` 会因为两边不一致而失败。
+#    要升级依赖请改 pyproject.toml，然后重跑：
+#        .\.venv\Scripts\python.exe scripts\sync_requirements.py
+#
+# 为什么还需要它：Streamlit Community Cloud 等托管平台默认只认 requirements.txt，
+# 不会去读 pyproject.toml 的依赖表。
+
+streamlit>=1.40
+pydantic>=2.7
+pydantic-settings>=2.3
+httpx>=0.27
+pypdf>=4.2
+python-docx>=1.1

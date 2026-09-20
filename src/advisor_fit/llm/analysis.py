@@ -4,17 +4,11 @@ from __future__ import annotations
 
 from pydantic import BaseModel
 
+from advisor_fit.llm.prompts import prompt_text
 from advisor_fit.models.professor import ProfessorProfile
 from advisor_fit.models.student import StudentProfile
 
-_ANALYSIS_INSTRUCTIONS = (
-    "基于学生画像和导师证据，生成深度匹配分析，分五个部分："
-    "research_intersection（研究交集）、method_match（方法能力匹配）、"
-    "background_gaps（背景缺口）、recommended_papers（最值得读的论文）、"
-    "knowledge_to_supplement（联系前应补的知识）。"
-    "每个分析点 text 用中文，fact_ids 只引用 student_facts 里的 id，"
-    "evidence_ids 只引用 professor 证据里的 id。不得编造事实。"
-)
+_ANALYSIS_INSTRUCTIONS = prompt_text("deep_analysis")
 
 
 class AnalysisPoint(BaseModel):
@@ -116,11 +110,7 @@ class DirectionSummary(BaseModel):
     evidence_ids: list[str] = []
 
 
-_DIRECTION_INSTRUCTIONS = (
-    "根据导师近年论文的标题、摘要和关键词，归纳其研究方向。"
-    "summary 用 2-3 句中文概述研究方向；topics 列出 3-5 个具体研究主题；"
-    "evidence_ids 只引用 payload 中论文的 source_ids。不得编造。"
-)
+_DIRECTION_INSTRUCTIONS = prompt_text("direction_summary")
 
 
 def generate_direction_summary(llm, professor: ProfessorProfile) -> DirectionSummary:

@@ -12,6 +12,8 @@ from html.parser import HTMLParser
 import httpx
 from pydantic import BaseModel
 
+from advisor_fit.llm.prompts import prompt_text
+
 _EMAIL_RE = re.compile(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}")
 _TITLE_RE = re.compile(r"<title[^>]*>(.*?)</title>", re.IGNORECASE | re.DOTALL)
 
@@ -26,13 +28,7 @@ class HomepageProfile(BaseModel):
     publications: list[str] = []  # 代表论文标题（用于作者名查不到时兜底检索）
 
 
-_HOMEPAGE_INSTRUCTIONS = (
-    "从导师个人主页文本中提取结构化信息。"
-    "name=姓名；institution=学校/单位；department=院系；title=职称（教授/副教授等）；"
-    "email=邮箱；declared_interests=研究方向或研究领域（列表）；"
-    "publications=代表论文或代表性成果的标题（列表，只提取明确的论文/著作标题）。"
-    "找不到的字段留空字符串或空列表，不得编造。"
-)
+_HOMEPAGE_INSTRUCTIONS = prompt_text("homepage_extract")
 
 
 class _TextExtractor(HTMLParser):

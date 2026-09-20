@@ -15,6 +15,7 @@ import httpx
 from pydantic import BaseModel
 
 from advisor_fit.ingest.homepage import html_to_text
+from advisor_fit.llm.prompts import prompt_text
 from advisor_fit.models.faculty import FacultyRecord
 
 _EMAIL_RE = re.compile(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}")
@@ -73,19 +74,9 @@ class FacultyPageOutput(BaseModel):
     publications: list[str] = []
 
 
-_LIST_INSTRUCTIONS = (
-    "从高校学院「师资/教师/导师」列表页的链接中，找出每位教师的姓名与其个人主页链接。"
-    "忽略导航栏、新闻、招生、学生、行政等非教师链接。"
-    "name 填教师中文姓名（2-4 个汉字），href 填完整链接。"
-)
+_LIST_INSTRUCTIONS = prompt_text("faculty_list")
 
-_PAGE_INSTRUCTIONS = (
-    "从高校教师个人主页文本中抽取结构化信息。"
-    "title=职称（教授/副教授/讲师等）；email=邮箱；"
-    "research_areas=研究领域（大类，列表）；research_directions=研究方向（具体，列表）；"
-    "publications=代表论文/著作标题（列表）。"
-    "只抽取文本中明确写出的内容，找不到留空，不得编造。"
-)
+_PAGE_INSTRUCTIONS = prompt_text("faculty_page")
 
 
 def fetch_html(url: str, *, client: httpx.Client | None = None, timeout: float = 20.0) -> str:

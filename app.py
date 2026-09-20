@@ -16,6 +16,8 @@ from pydantic import ValidationError
 from advisor_fit.agents.research import research_professor
 from advisor_fit.config import settings
 from advisor_fit.export.report import export_docx, export_json, export_markdown
+from advisor_fit.harness.budget import BudgetTracker
+from advisor_fit.harness.trace import RunTrace
 from advisor_fit.ingest.cv import (
     apply_fact_edits,
     build_student_profile,
@@ -53,6 +55,7 @@ _PROFESSOR_STATE_KEYS = (
     "prof_interests", "prof_homepage", "prof_english_name", "prof_search_institution",
     "prof_seed_titles", "_faculty_directions", "_faculty_seed_titles",
     "candidate_papers", "_research_confirm", "_research_steps", "_research_granted",
+    "_research_degraded",
     "result", "identity_confirmed", "paper_read_confirmed", "run_label",
     "manual_paper_count",
 )
@@ -194,6 +197,7 @@ def _run_research(
     """用导师研究 Agent 检索并消歧，结果与确认门控写入 session_state。"""
     provider = WanfangProvider(settings.wanfang_app_key)
     source = None if mode == "auto" else mode
+    trace = RunTrace(task=f"检索导师「{name}」的候选论文")
     result = research_professor(
         _llm(),
         provider,
@@ -206,7 +210,17 @@ def _run_research(
         known_directions=known_directions or None,
         resume_steps=st.session_state.get("_research_steps"),
         granted_confirmations=st.session_state.get("_research_granted", []),
+        budget=BudgetTracker(),
+        trace=trace,
     )
+    st.session_state["_research_degraded"] = trace.degraded_reason
+    run_id = st.session_state.get("run_id")
+    if run_id:
+        try:
+            # 轨迹落库失败不得影响检索结果
+            st.session_state.repo.save_trace(run_id, trace)
+        except Exception:  # noqa: BLE001
+            pass
     if result.needs_confirmation:
         st.session_state["_research_confirm"] = result.needs_confirmation
         st.session_state["_research_steps"] = result.log
@@ -902,6 +916,12 @@ if active_page == "papers":
 
     if st.button("🔎 一键研究（Agent）", type="primary"):
         _trigger_search()
+
+    if st.session_state.get("_research_degraded"):
+        st.info(
+            f"本次检索触发了资源上限（{st.session_state['_research_degraded']}），"
+            "已降级返回已完成的部分结果；可稍后重试或改用手动补录。"
+        )
 
     if st.session_state.get("_auto_search"):
         st.session_state["_auto_search"] = False

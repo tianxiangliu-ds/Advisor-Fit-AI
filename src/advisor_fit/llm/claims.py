@@ -4,14 +4,11 @@ from __future__ import annotations
 
 from pydantic import BaseModel
 
+from advisor_fit.llm.prompts import prompt_text
 from advisor_fit.models.evidence import Claim
 from advisor_fit.validation.claims import validate_claims
 
-_CLAIMS_INSTRUCTIONS = (
-    "根据 payload 中提供的、作者归属已确认的论文证据，归纳导师近年的研究方向趋势。"
-    "每个 claim 只能引用 payload 中出现的 evidence id。"
-    "不得输出招生状态、团队规模等任何未提供证据的字段。"
-)
+_CLAIMS_INSTRUCTIONS = prompt_text("claims")
 
 
 class ClaimsOutput(BaseModel):

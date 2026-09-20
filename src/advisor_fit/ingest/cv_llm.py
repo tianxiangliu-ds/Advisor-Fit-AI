@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from pydantic import BaseModel
 
+from advisor_fit.llm.prompts import prompt_text
 from advisor_fit.models.common import FactStatus
 from advisor_fit.models.student import (
     Education,
@@ -16,15 +17,7 @@ from advisor_fit.models.student import (
 # 与 UI 的 Selectbox 选项保持一致
 _ALLOWED_FIELDS = ("skill", "degree", "institution", "interest", "project", "publication")
 
-_EXTRACT_INSTRUCTIONS = (
-    "从简历文本中抽取学生的姓名、事实与结构化经历。"
-    "name 填学生真实姓名（通常在简历顶部）；没有明确写出则留空。"
-    "只抽取文本中明确写出的内容，不得推断、补全或猜测。"
-    f"facts 的 field 只能是以下之一：{', '.join(_ALLOWED_FIELDS)}；value 填原文或最简表述。"
-    "education 填教育经历（学历/学校/专业/起止时间，逐年一条）；"
-    "projects 填项目/科研经历（名称/简述/角色）；"
-    "publications 填论文或专利（标题/出处/年份）。"
-)
+_EXTRACT_INSTRUCTIONS = prompt_text("cv_extract")
 
 
 class LlmStudentFact(BaseModel):

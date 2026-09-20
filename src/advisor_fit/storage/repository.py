@@ -170,6 +170,13 @@ class Repository:
     def save_draft(self, run_id: str, draft: Draft) -> str:
         return self.save_artifact(run_id, "draft", draft)
 
+    def save_trace(self, run_id: str, trace: BaseModel) -> str:
+        """持久化 Agent 运行轨迹，供评测与复盘。"""
+        return self.save_artifact(run_id, "trace", trace)
+
+    def load_trace(self, run_id: str) -> dict[str, Any] | None:
+        return self.load_latest(run_id, "trace")
+
     # -- 读取 ----------------------------------------------------------------
 
     def load_artifacts(self, run_id: str, kind: str | None = None) -> list[dict[str, Any]]:

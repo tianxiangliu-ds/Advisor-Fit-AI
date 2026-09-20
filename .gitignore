@@ -23,6 +23,11 @@ venv/
 .ruff_cache/
 .mypy_cache/
 
+# pytest 临时目录（必须留在项目内，见 pyproject.toml 说明）
+# 通过 .tmp/.gitkeep 让目录随仓库存在：pytest 不会创建父目录
+.tmp/*
+!.tmp/.gitkeep
+
 # 真实上传文件（测试只允许匿名 fixtures）
 *.pdf
 

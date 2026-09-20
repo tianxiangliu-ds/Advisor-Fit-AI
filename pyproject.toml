@@ -34,7 +34,16 @@ packages = ["src/advisor_fit"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-addopts = "--basetemp=.pytest_basetemp"
+# 临时目录固定放在项目工作区的 .tmp/ 下，且每次运行用全新子目录（见 tests/conftest.py）。
+#
+# 为什么不用 --basetemp：pytest 在给了 --basetemp 时会「先删掉旧目录再新建」，
+# 而 DSH Windows 沙箱创建的目录之后既删不掉也扫不动，于是每次运行都 PermissionError。
+# 改用 PYTEST_DEBUG_TEMPROOT 指向每次全新的目录，pytest 就只新建、不碰旧目录。
+#
+# -p no:cacheprovider：同理，.pytest_cache 在沙箱下也可能写不回，直接关掉缓存。
+addopts = "-p no:cacheprovider"
+# 跑完不保留各用例的临时目录，减少 .tmp 下的堆积
+tmp_path_retention_policy = "none"
 
 [tool.ruff]
 line-length = 100

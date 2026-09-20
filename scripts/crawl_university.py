@@ -21,12 +21,14 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
+import html as html_module
 import json
 import re
 import sys
 import time
 from collections import Counter
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from urllib.parse import urljoin, urlparse
 
@@ -40,10 +42,9 @@ from advisor_fit.ingest.faculty import (  # noqa: E402
     fetch_html,
     fetch_html_rendered,
 )
+from advisor_fit.ingest.fetch import OUTCOME_ROBOTS_DENIED, Fetcher  # noqa: E402
 from advisor_fit.ingest.homepage import html_to_text  # noqa: E402
 from advisor_fit.ingest.name_verify import (  # noqa: E402
-    has_common_surname,
-    looks_like_foreign_name,
     looks_like_person_name,
     parse_card_link,
     verify_with_llm,
@@ -108,6 +109,76 @@ UNIVERSITIES: dict[str, str] = {
     "暨南大学": "https://www.jnu.edu.cn/",
 }
 
+# 各校研究生院（用于筛出"确实招研究生的培养单位"）
+GRAD_SITES: dict[str, str] = {
+    "武汉大学": "https://gs.whu.edu.cn/zsgz/sszs/a2026n.htm",
+    "华中科技大学": "https://gs.hust.edu.cn/",
+    "中南大学": "https://gra.csu.edu.cn/",
+    "清华大学": "https://yjsy.tsinghua.edu.cn/",
+    "北京大学": "https://grs.pku.edu.cn/",
+    "中国科学技术大学": "https://gradschool.ustc.edu.cn/",
+    "四川大学": "https://gs.scu.edu.cn/",
+    "东南大学": "https://yjsy.seu.edu.cn/",
+    "北京航空航天大学": "https://graduate.buaa.edu.cn/",
+    "西安电子科技大学": "https://gr.xidian.edu.cn/",
+    "南京大学": "https://grawww.nju.edu.cn/",
+    "复旦大学": "https://gsao.fudan.edu.cn/",
+    "中山大学": "https://graduate.sysu.edu.cn/",
+    "浙江大学": "https://grs.zju.edu.cn/",
+    "上海交通大学": "https://www.gs.sjtu.edu.cn/",
+    "天津大学": "https://gs.tju.edu.cn/",
+    "武汉理工大学": "https://gd.whut.edu.cn/",
+    "华中师范大学": "https://gs.ccnu.edu.cn/",
+    "华中农业大学": "https://yjs.hzau.edu.cn/",
+    "苏州大学": "https://yjs.suda.edu.cn/",
+}
+
+# 研究生招生页里"培养单位"链接的文字特征：如「104信息管理学院(2026年)>」
+_GRAD_UNIT_RE = re.compile(r"^\d{2,3}\s*(.+?)(?:[（(]\s*20\d{2}\s*年\s*[)）])?[>\s]*$")
+
+
+def _normalize_unit_name(text: str) -> str:
+    """把「104信息管理学院(2026年)>」规整成「信息管理学院」，便于与学院官网名对齐。"""
+    name = re.sub(r"\s+", "", text or "")
+    name = re.sub(r"^[0-9]{2,3}", "", name)
+    name = re.sub(r"[（(]\s*20\d{2}\s*年\s*[)）]", "", name)
+    name = name.rstrip(">＞ ").strip()
+    return name.replace("（", "(").replace("）", ")")
+
+
+def discover_graduate_units(grad_url: str, *, client=None, timeout: float = 20.0) -> list[str]:
+    """从研究生院页面取出"招研究生的培养单位"名单。
+
+    这一步用于**筛选**：只爬确实招研究生的学院，排除「孔子学院」这类与硕博招生
+    无关的单位，避免把无用数据写进库。
+    """
+    html = _fetch_with_fallback(grad_url, client=client, timeout=timeout)
+    units: list[str] = []
+    seen: set[str] = set()
+    for link in extract_links(html, grad_url):
+        raw = re.sub(r"\s+", "", link["text"])
+        if not any(key in raw for key in ("学院", "研究院", "实验室", "学系", "中心", "医院")):
+            continue
+        if not _GRAD_UNIT_RE.match(raw):
+            continue
+        name = _normalize_unit_name(raw)
+        if len(name) < 3 or name in seen:
+            continue
+        seen.add(name)
+        units.append(name)
+    return units
+
+
+def _unit_matches(college: str, units: list[str]) -> bool:
+    """学院官网名 与 研究生院培养单位名 是否指同一个单位。"""
+    target = _normalize_unit_name(college)
+    for unit in units:
+        if target == unit:
+            return True
+        if len(target) >= 4 and len(unit) >= 4 and (target in unit or unit in target):
+            return True
+    return False
+
 # 「院系设置」入口页的常见叫法
 COLLEGE_DIR_KEYS = (
     "院系设置", "学院设置", "院系概况", "学部院系", "院系机构", "院系介绍",
@@ -131,7 +202,7 @@ NAME_STOPWORDS = {
     "新闻", "通知", "公告", "招生", "就业", "党建", "工会", "校友", "人才", "科研",
     "教学", "学生", "研究生", "本科生", "实验", "中心", "办公室", "委员会", "研究所",
     "实验室", "系所", "概况", "简介", "联系", "地图", "导航", "登录", "搜索", "下载",
-    "上一篇", "下一篇", "返回", "列表", "全部", "展开", "收起", "关于", "服务",
+    "上一篇", "下一篇", "上页", "返回", "列表", "全部", "展开", "收起", "关于", "服务",
     # 实测抓到的站点导航项
     "学院简介", "学院概况", "师资队伍", "师资力量", "人才培养", "现任领导", "党群工作",
     "规章制度", "科学研究", "信息公开", "国际交流", "合作交流", "机构设置", "荣休教师",
@@ -169,6 +240,7 @@ class CollegeResult:
 
 _JS_ENABLED = False
 _LLM = None
+_FETCHER: Fetcher | None = None
 
 
 GENERIC_UNIT_NAMES = {
@@ -202,6 +274,14 @@ def _expand_generic_entries(
 
 def _fetch(url: str, *, client=None, timeout: float = 20.0, js: bool = False) -> str:
     """取网页。js=True 时用浏览器渲染（应对 JS 动态页），否则走普通请求。"""
+    if _FETCHER is not None:
+        result = _FETCHER.fetch(url)
+        if not result.ok:
+            if result.outcome == OUTCOME_ROBOTS_DENIED or result.status_code in (401, 403, 429):
+                raise PermissionError(result.friendly_error())
+            raise RuntimeError(result.friendly_error())
+        if not (js or _JS_ENABLED):
+            return result.text
     if js or _JS_ENABLED:
         return fetch_html_rendered(url, timeout=max(timeout, 30.0))
     return fetch_html(url, client=client, timeout=timeout)
@@ -214,10 +294,14 @@ def _fetch_with_fallback(url: str, *, client=None, timeout: float = 20.0) -> str
         html = _fetch(url, client=client, timeout=timeout)
         if len(html_to_text(html)) >= 200 and len(extract_links(html, url)) >= 5:
             return html
+    except PermissionError:
+        raise
     except Exception:  # noqa: BLE001 - 普通抓取失败就走渲染
         html = ""
     try:
         return _fetch(url, client=client, timeout=timeout, js=True)
+    except PermissionError:
+        raise
     except Exception:  # noqa: BLE001
         return html
 
@@ -255,6 +339,10 @@ def _college_links(html: str, base: str) -> list[tuple[str, str]]:
     colleges: list[tuple[str, str]] = []
     seen: set[str] = set()
     for link in extract_links(html, base):
+        # Cross-section page anchors (e.g. 交流合作#孔子学院) are navigation,
+        # not entries in the college directory.
+        if urlparse(link["href"]).fragment:
+            continue
         text = re.sub(r"\s+", "", link["text"])
         if not (2 <= len(text) <= 16):
             continue
@@ -279,10 +367,8 @@ def discover_colleges(
     """
     home_html = _fetch_with_fallback(home, client=client, timeout=timeout)
     best = _college_links(home_html, home)
-    if len(best) >= 5:
-        return best
 
-    for url in candidate_dir_urls(home_html, home)[:6]:
+    for url in candidate_dir_urls(home_html, home):
         try:
             html = _fetch_with_fallback(url, client=client, timeout=timeout)
         except Exception:  # noqa: BLE001 - 单个入口失败就试下一个
@@ -290,11 +376,8 @@ def discover_colleges(
         links = _college_links(html, url)
         if len(links) > len(best):
             best = links
-        if len(best) >= 10:
-            return best
-
     if len(best) >= 3:
-        return best
+        return _expand_generic_entries(best, client=client, timeout=timeout)
 
     # 二级：先进入「学校概况 / 组织机构」这类页面，再从里面找院系入口
     for link in extract_links(home_html, home):
@@ -406,7 +489,7 @@ def extract_entries(html: str, base_url: str) -> list[dict]:
             continue
         # 卡片式链接：整张人物卡片是一个 <a>，链接文字是「姓名+单位+职称+邮箱」的长串
         card = parse_card_link(text)
-        if card and card.get("name"):
+        if card and card.get("name") and (card.get("title") or card.get("email")):
             item = _entry(card["name"])
             if card.get("title") and not item["title"]:
                 item["title"] = card["title"]
@@ -414,6 +497,29 @@ def extract_entries(html: str, base_url: str) -> list[dict]:
                 item["email"] = card["email"]
             if not item["homepage_url"]:
                 item["homepage_url"] = link["href"]
+
+    # On some official sites the whole teacher card is linked, while the
+    # opening anchor's title attribute holds the clean name (sometimes spaced).
+    for anchor in re.finditer(r"<a\b(?P<attrs>[^>]*)>(?P<body>.*?)</a>", html, re.I | re.S):
+        attrs = anchor.group("attrs")
+        title_attr = re.search(r"\btitle\s*=\s*['\"]([^'\"]+)['\"]", attrs, re.I)
+        href_attr = re.search(r"\bhref\s*=\s*['\"]([^'\"]+)['\"]", attrs, re.I)
+        if not title_attr or not href_attr:
+            continue
+        name = re.sub(r"\s+", "", html_module.unescape(title_attr.group(1)))
+        if name in NAME_STOPWORDS or not looks_like_person_name(name):
+            continue
+        body = re.sub(r"\s+", "", html_module.unescape(_TAG_RE.sub("", anchor.group("body"))))
+        if name not in body:
+            continue
+        item = _entry(name)
+        item["homepage_url"] = item["homepage_url"] or _norm(href_attr.group(1), base_url)
+        role = re.search(rf"{re.escape(name)}.{{0,8}}?({'|'.join(TITLE_WORDS)})", body)
+        if role and not item["title"]:
+            item["title"] = role.group(1)
+        email = _EMAIL_RE.search(body)
+        if email and not item["email"]:
+            item["email"] = email.group(0)
 
     for row in extract_table_rows(html):
         name = ""
@@ -443,6 +549,90 @@ def extract_entries(html: str, base_url: str) -> list[dict]:
     return list(entries.values())
 
 
+def collect_paginated_entries(
+    html: str, list_url: str, *, client=None, delay: float = 1.0, timeout: float = 20.0,
+    page_contexts: dict[str, str] | None = None,
+) -> list[dict]:
+    """Follow faculty-list pagination without following unrelated site navigation."""
+    entries = {entry["name"]: entry for entry in extract_entries(html, list_url)}
+    if page_contexts is not None:
+        page_contexts[list_url] = html_to_text(html)
+    visited = {list_url}
+    pending = [(html, list_url)]
+    page_prefix = urlparse(list_url).path.removesuffix(".htm") + "/"
+    host = urlparse(list_url).netloc
+    while pending:
+        page_html, page_url = pending.pop(0)
+        for link in extract_links(page_html, page_url):
+            target = link["href"]
+            parsed = urlparse(target)
+            label = link["text"].strip()
+            if (
+                target in visited
+                or parsed.netloc != host
+                or not parsed.path.startswith(page_prefix)
+                or not (label in {"下页", "尾页", "下一页"} or label.isdigit())
+            ):
+                continue
+            visited.add(target)
+            try:
+                time.sleep(delay)
+                following = _fetch_with_fallback(target, client=client, timeout=timeout)
+            except Exception:  # noqa: BLE001 - retain earlier pages; report missing page later
+                continue
+            pending.append((following, target))
+            if page_contexts is not None:
+                page_contexts[target] = html_to_text(following)
+            for entry in extract_entries(following, target):
+                previous = entries.setdefault(entry["name"], entry)
+                for key in ("title", "email", "directions", "homepage_url"):
+                    if not previous.get(key) and entry.get(key):
+                        previous[key] = entry[key]
+    return list(entries.values())
+
+
+def collect_faculty_siblings(
+    html: str, list_url: str, *, client=None, delay: float = 1.0,
+    timeout: float = 20.0, page_contexts: dict[str, str] | None = None,
+) -> list[dict]:
+    """Union adjacent faculty categories, such as professor/associate/lecturer."""
+    entries = {
+        entry["name"]: entry for entry in collect_paginated_entries(
+            html, list_url, client=client, delay=delay, timeout=timeout,
+            page_contexts=page_contexts,
+        )
+    }
+    directory = urlparse(list_url).path.rsplit("/", 1)[0] + "/"
+    categories = {"教授", "副教授", "讲师", "专任教师", "在岗教师", "全职教师", "研究员"}
+    seen = {list_url}
+    for link in extract_links(html, list_url):
+        target = link["href"]
+        parsed = urlparse(target)
+        label = re.sub(r"\s+", "", link["text"])
+        if (
+            target in seen or label not in categories
+            or parsed.netloc != urlparse(list_url).netloc
+            or not parsed.path.startswith(directory)
+            or "/" in parsed.path[len(directory):]
+        ):
+            continue
+        seen.add(target)
+        try:
+            time.sleep(delay)
+            following = _fetch_with_fallback(target, client=client, timeout=timeout)
+        except Exception:  # noqa: BLE001 - one category cannot erase earlier pages
+            continue
+        for entry in collect_paginated_entries(
+            following, target, client=client, delay=delay, timeout=timeout,
+            page_contexts=page_contexts,
+        ):
+            previous = entries.setdefault(entry["name"], entry)
+            for key in ("title", "email", "directions", "homepage_url"):
+                if not previous.get(key) and entry.get(key):
+                    previous[key] = entry[key]
+    return list(entries.values())
+
+
 _DIRECTION_MARKERS = ("研究方向", "研究领域", "主要研究", "研究兴趣", "科研方向")
 
 
@@ -455,15 +645,21 @@ def extract_detail_fields(html: str, name: str = "") -> dict:
     """
     text = html_to_text(html)
     fields = {"title": "", "email": "", "directions": ""}
+    lines = [line.strip() for line in text.splitlines() if line.strip()]
+    for index, line in enumerate(lines):
+        if line == "正文" and name and any(name in part for part in lines[index + 1:index + 4]):
+            lines = lines[index + 1:]
+            break
 
-    found = _EMAIL_RE.search(text)
+    found = _EMAIL_RE.search("\n".join(lines))
     if found:
         fields["email"] = found.group(0)
 
-    lines = [line.strip() for line in text.splitlines() if line.strip()]
     plain_title = ""
 
-    for line in lines:
+    for index, line in enumerate(lines):
+        if line == name and index + 1 < len(lines) and lines[index + 1] in TITLE_WORDS:
+            fields["title"] = lines[index + 1]
         if not fields["title"] and name and name in line:
             title = _match_title(line)
             if title:
@@ -479,12 +675,39 @@ def extract_detail_fields(html: str, name: str = "") -> dict:
                 # 只认「以关键词开头」的行，避免把论文标题里的"研究"误当研究方向
                 if line.startswith(marker):
                     value = line[len(marker) :].lstrip("：: 　").strip()
+                    if not value and line == marker and index + 1 < len(lines):
+                        value = lines[index + 1]
+                    if value in {"个人简介", "研究方向", "学术成果", "研究领域"}:
+                        value = ""
                     if 2 <= len(value) <= 120:
                         fields["directions"] = value
                     break
 
     if not fields["title"]:
         fields["title"] = plain_title
+    # Some colleges put both the role and research interests in a short
+    # biography paragraph rather than labelled fields. Only inspect the
+    # paragraph that begins with this person's name, not navigation or papers.
+    if name and (not fields["title"] or not fields["directions"]):
+        title_pattern = "|".join(re.escape(word) for word in TITLE_WORDS)
+        for line in lines:
+            if not line.startswith((name + "，", name + ",", name + "：")):
+                continue
+            if not fields["title"]:
+                role = re.search(
+                    rf"(?:现为|现任|担任).{{0,30}}?({title_pattern})(?=[，。；、\s]|$)",
+                    line[:300],
+                )
+                if role:
+                    fields["title"] = role.group(1)
+            if not fields["directions"]:
+                interest = re.search(
+                    r"(?:学术兴趣包括|研究兴趣包括|研究方向为)[：:]?(.{2,120}?)(?:，现|。|；|$)",
+                    line[:500],
+                )
+                if interest:
+                    fields["directions"] = interest.group(1).strip("，、 ")
+            break
     return fields
 
 
@@ -496,7 +719,7 @@ SUBPAGE_KEYS = (
 )
 
 
-def _sub_page_candidates(html: str, url: str, limit: int = 25) -> list[dict]:
+def _sub_page_candidates(html: str, url: str) -> list[dict]:
     """挑出"可能是下一层名单页"的链接。
 
     注意：**不限制在前 N 个链接里找**。像杜伦联合学院的「国内师资 / 国外师资」
@@ -509,12 +732,14 @@ def _sub_page_candidates(html: str, url: str, limit: int = 25) -> list[dict]:
         href = (link["href"] or "").strip()
         if not href or href.rstrip("/") == normalized_url or href in seen:
             continue
+        if urlparse(href).netloc != urlparse(url).netloc:
+            continue
         seen.add(href)
         text = re.sub(r"\s+", "", link["text"])
         if not text or not any(key in text for key in SUBPAGE_KEYS):
             continue
         picked.append({"text": text, "href": href})
-    return picked[:limit]
+    return picked
 
 
 def _collect_entries(
@@ -553,8 +778,8 @@ def _collect_entries(
     if not candidates:
         return entries
 
-    best = entries
-    for link in candidates[:15]:
+    combined = {entry["name"]: entry for entry in entries}
+    for link in candidates:
         sub = _collect_entries(
             link["href"],
             client=client,
@@ -565,9 +790,12 @@ def _collect_entries(
             max_depth=max_depth,
             enough=enough,
         )
-        if len(sub) > len(best):
-            best = sub
-    return best
+        for entry in sub:
+            previous = combined.setdefault(entry["name"], entry)
+            for key in ("title", "email", "directions", "homepage_url"):
+                if not previous.get(key) and entry.get(key):
+                    previous[key] = entry[key]
+    return list(combined.values())
 
 
 def enrich_with_details(
@@ -592,6 +820,13 @@ def enrich_with_details(
         except Exception:  # noqa: BLE001 - 单个人失败不影响整体
             continue
         detail = extract_detail_fields(html, entry.get("name", ""))
+        text = html_to_text(html)
+        marker = "\n正文\n"
+        if marker in text:
+            text = text.split(marker, 1)[1]
+        entry["profile_text"] = text.strip()
+        entry["content_hash"] = hashlib.sha256(html.encode("utf-8")).hexdigest()[:16]
+        entry["source_url"] = url
         for key, value in detail.items():
             if value and not entry.get(key):
                 entry[key] = value
@@ -600,27 +835,24 @@ def enrich_with_details(
 
 
 def _finalize_entries(entries: list[dict], html: str, result: CollegeResult) -> list[dict]:
-    """对候选做规则之外的复核（大模型），返回清理后的结果。
-
-    注意一个坑：模型调用失败时 verify_with_llm 会"原样返回"，如果不管，
-    错误数据就会被整批放行（实测口腔医学院的 35 个医院导航词就是这样进来的）。
-    所以这里加了一道判断：一整批原样返回且数量较多时，视为调用失败，
-    退回"必须有常见姓氏或是外籍姓名"的更严规则。
-    """
+    """对候选做规则之外的复核；不能按常见姓氏删除罕见姓名。"""
     if not entries or _LLM is None:
         return entries
-    names = [item["name"] for item in entries]
-    keep = verify_with_llm(_LLM, names, html_to_text(html))
-    if keep == names and len(names) >= 10:
-        keep = [
-            name
-            for name in names
-            if has_common_surname(name) or looks_like_foreign_name(name)
-        ]
-        note = "AI 复核未生效，已退回姓氏过滤"
-        result.note = f"{result.note}；{note}".strip("；")
+    context = html_to_text(html)
+    eligible = [item["name"] for item in entries if item["name"] in context]
+    keep: list[str] = []
+    for start in range(0, len(eligible), 25):
+        batch = eligible[start:start + 25]
+        # The verifier only receives its first 4,000 characters. Give every
+        # candidate a nearby source excerpt, including late pagination pages.
+        excerpts = []
+        for name in batch:
+            position = context.find(name)
+            excerpts.append(context[max(0, position - 40):position + 100])
+        keep.extend(verify_with_llm(_LLM, batch, "\n".join(excerpts)))
     before = len(entries)
-    kept = [item for item in entries if item["name"] in set(keep)]
+    allowed = set(keep)
+    kept = [item for item in entries if item["name"] not in eligible or item["name"] in allowed]
     if len(kept) != before and "AI 复核" not in result.note:
         note = f"AI 复核剔除 {before - len(kept)} 个非人名"
         result.note = f"{result.note}；{note}".strip("；")
@@ -654,7 +886,12 @@ def crawl_college(
         result.note = f"抓师资页失败：{type(exc).__name__}"
         return result
 
-    entries = _finalize_entries(extract_entries(html, list_url), html, result)
+    contexts: dict[str, str] = {}
+    paginated = collect_faculty_siblings(
+        html, list_url, client=client, delay=delay, timeout=timeout,
+        page_contexts=contexts,
+    )
+    entries = _finalize_entries(paginated, "\n".join(contexts.values()), result)
     if len(entries) < 3:
         # 静态抓到的姓名太少：这一页很可能是 JS 渲染出来的，强制重抓一次
         try:
@@ -712,10 +949,22 @@ def crawl_university(
     discover_only: bool = False,
     max_colleges: int = 0,
     details_per_college: int = 0,
+    only_college: str = "",
+    checkpoint_dir: Path | None = None,
+    graduate_units: list[str] | None = None,
 ) -> list[CollegeResult]:
     print(f"\n{'=' * 70}\n【{university}】{home}\n{'=' * 70}", flush=True)
     colleges = discover_colleges(home, client=client)
     print(f"发现学院：{len(colleges)} 个", flush=True)
+    if graduate_units:
+        kept = [item for item in colleges if _unit_matches(item[0], graduate_units)]
+        dropped = [item[0] for item in colleges if not _unit_matches(item[0], graduate_units)]
+        print(f"按研究生院培养单位筛选：保留 {len(kept)} 个，排除 {len(dropped)} 个", flush=True)
+        if dropped:
+            print(f"  已排除：{'、'.join(dropped[:8])}", flush=True)
+        colleges = kept
+    if only_college:
+        colleges = [(name, url) for name, url in colleges if name == only_college]
     if max_colleges:
         colleges = colleges[:max_colleges]
     if discover_only:
@@ -725,10 +974,31 @@ def crawl_university(
 
     results: list[CollegeResult] = []
     for index, (name, url) in enumerate(colleges, 1):
-        time.sleep(delay)
-        outcome = crawl_college(
-            name, url, client=client, delay=delay, details_per_college=details_per_college
-        )
+        checkpoint = checkpoint_dir / f"{index:02d}.json" if checkpoint_dir else None
+        outcome = None
+        if checkpoint and checkpoint.exists():
+            try:
+                saved = json.loads(checkpoint.read_text(encoding="utf-8"))
+                if saved["college_url"] == url and saved["result"]["college"] == name:
+                    candidate = CollegeResult(**saved["result"])
+                    if candidate.entries:
+                        outcome = candidate
+                        print(f"  [{index}/{len(colleges)}] {name}：复用本轮断点", flush=True)
+            except (OSError, ValueError, KeyError, TypeError):
+                pass
+        if outcome is None:
+            time.sleep(delay)
+            outcome = crawl_college(
+                name, url, client=client, delay=delay, details_per_college=details_per_college
+            )
+            if checkpoint:
+                checkpoint.parent.mkdir(parents=True, exist_ok=True)
+                staged = checkpoint.with_suffix(".tmp")
+                staged.write_text(
+                    json.dumps({"college_url": url, "result": asdict(outcome)}, ensure_ascii=False),
+                    encoding="utf-8",
+                )
+                staged.replace(checkpoint)
         results.append(outcome)
         if outcome.names:
             print(f"  [{index}/{len(colleges)}] {name}：{len(outcome.names)} 位", flush=True)
@@ -752,12 +1022,15 @@ def drop_site_navigation(results: list[CollegeResult]) -> tuple[list[CollegeResu
 
     for item in results:
         item.names = [name for name in item.names if name not in nav]
+        item.entries = [entry for entry in item.entries if entry["name"] not in nav]
         if not item.names and not item.note:
             item.note = "过滤后为空（原文只有站点导航项）"
     return results, sorted(nav)
 
 
-def save(university: str, results: list[CollegeResult]) -> int:
+def save(
+    university: str, results: list[CollegeResult], *, output_path: Path | None = None
+) -> int:
     results, dropped = drop_site_navigation(results)
     if dropped:
         sample = "、".join(dropped[:5])
@@ -786,8 +1059,10 @@ def save(university: str, results: list[CollegeResult]) -> int:
                         [entry["directions"]] if entry.get("directions") else []
                     ),
                     homepage_url=entry.get("homepage_url", ""),
+                    profile_text=entry.get("profile_text", ""),
                     sources=["official"],
-                    source_url=item.list_url,
+                    source_url=entry.get("source_url") or item.list_url,
+                    content_hash=entry.get("content_hash", ""),
                 )
             )
         payload.append(
@@ -802,7 +1077,7 @@ def save(university: str, results: list[CollegeResult]) -> int:
 
     out_dir = ROOT / "data" / "official_crawl"
     out_dir.mkdir(parents=True, exist_ok=True)
-    (out_dir / f"{university}.json").write_text(
+    (output_path or out_dir / f"{university}.json").write_text(
         json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8"
     )
 
@@ -818,6 +1093,8 @@ def main() -> int:
     parser.add_argument("--home", default="")
     parser.add_argument("--all", action="store_true", help="跑内置的全部 top20")
     parser.add_argument("--only", default="", help="只跑这些学校，用逗号分隔")
+    parser.add_argument("--college", default="", help="只采指定学院，明细单独保存")
+    parser.add_argument("--output", default="", help="本次采集明细 JSON 路径，避免覆盖旧结果")
     parser.add_argument("--discover-only", action="store_true")
     parser.add_argument("--delay", type=float, default=1.0, help="每次请求间隔秒数")
     parser.add_argument("--max-colleges", type=int, default=0)
@@ -829,9 +1106,17 @@ def main() -> int:
         "--details-per-college", type=int, default=0,
         help="每个学院额外进入前 N 位导师的个人主页，补采职称/邮箱/研究方向（0=不补）",
     )
+    parser.add_argument(
+        "--graduate", action="store_true",
+        help="先用研究生院的培养单位名单筛选，只爬确实招研究生的学院",
+    )
+    parser.add_argument(
+        "--details", action="store_true",
+        help="爬完自动为所有人补采详情页字段（相当于 details-per-college 不限量）",
+    )
     args = parser.parse_args()
 
-    global _JS_ENABLED, _LLM
+    global _JS_ENABLED, _LLM, _FETCHER
     _JS_ENABLED = args.js
     llm = build_llm()
     _LLM = None if isinstance(llm, NullLLM) else llm
@@ -850,12 +1135,28 @@ def main() -> int:
 
     total = 0
     client = build_client()
+    _FETCHER = Fetcher(
+        client=client, user_agent=client.headers["User-Agent"],
+        min_interval_seconds=max(args.delay, 1.5),
+    )
     try:
         for university, home in targets:
             if not home:
                 print(f"没有 {university} 的官网地址，请用 --home 指定")
                 continue
             try:
+                units: list[str] | None = None
+                if args.graduate:
+                    grad_url = GRAD_SITES.get(university, "")
+                    if grad_url:
+                        try:
+                            units = discover_graduate_units(grad_url, client=client)
+                            print(f"研究生院培养单位：{len(units)} 个", flush=True)
+                        except Exception as exc:  # noqa: BLE001 - 取不到就退回全量
+                            print(f"  研究生院名单获取失败（{type(exc).__name__}），本次不筛选")
+                    else:
+                        print("  没有内置的研究生院地址，本次不筛选")
+                detail_limit = 10**6 if args.details else args.details_per_college
                 results = crawl_university(
                     university,
                     home,
@@ -863,14 +1164,23 @@ def main() -> int:
                     delay=args.delay,
                     discover_only=args.discover_only,
                     max_colleges=args.max_colleges,
-                    details_per_college=args.details_per_college,
+                    details_per_college=detail_limit,
+                    only_college=args.college,
+                    graduate_units=units,
+                    checkpoint_dir=(
+                        Path(args.output + ".checkpoints") if args.output else None
+                    ),
                 )
             except Exception as exc:  # noqa: BLE001 - 单所学校失败不影响其它
                 print(f"  {university} 整体失败：{type(exc).__name__}: {exc}", flush=True)
                 continue
             if args.discover_only:
                 continue
-            saved = save(university, results)
+            output_path = Path(args.output) if args.output else (
+                ROOT / "data" / "official_crawl" / f"{university}-{args.college}.json"
+                if args.college else None
+            )
+            saved = save(university, results, output_path=output_path)
             total += saved
             hit = sum(1 for item in results if item.names)
             print(f"  → {university}：{hit}/{len(results)} 个学院采到名单", flush=True)

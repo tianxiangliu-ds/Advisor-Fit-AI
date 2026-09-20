@@ -69,7 +69,8 @@ class AdvisorRepository:
             conn.executescript(_SCHEMA)
 
     def _connect(self) -> sqlite3.Connection:
-        conn = sqlite3.connect(self.db_path)
+        # timeout：多个爬取进程并行写同一个库时，让 SQLite 等锁而不是直接报 locked
+        conn = sqlite3.connect(self.db_path, timeout=30.0)
         conn.row_factory = sqlite3.Row
         return conn
 

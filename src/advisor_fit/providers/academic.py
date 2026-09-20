@@ -22,3 +22,8 @@ class Work(BaseModel):
     source_platform: str | None = None
     authors: list[str] = []
     institution: str = ""
+    # 跨库合并后填充：收录这篇论文的所有来源（如 ["OpenAlex", "DBLP"]）。
+    # 「被多个库收录」本身就是可信度信号，展示时给用户看。
+    sources: list[str] = []
+    # 学科分类（我们的内部 key，如 "medicine"），来自库自带的学科标签或关键词判断。
+    disciplines: list[str] = []

@@ -25,6 +25,9 @@ class FakeWork:
         self.authors = authors or []
         self.institution = institution
         self.venue = ""
+        self.sources = []
+        self.disciplines = []
+        self.citation_count = None
 
 
 class FakeProvider:
@@ -32,11 +35,13 @@ class FakeProvider:
         self.works = works or []
         self.calls = []
 
-    def search_publications(self, name, *, institution=None, source="zh", limit=20):
+    def search_publications(
+        self, name, *, institution=None, source="zh", discipline=None, limit=20
+    ):
         self.calls.append((name, institution, source))
         return self.works
 
-    def search_by_title(self, title, *, source="zh", limit=5):
+    def search_by_title(self, title, *, source="zh", discipline=None, limit=5):
         self.calls.append(("title", title, source))
         return []
 
@@ -255,11 +260,13 @@ def test_investigate_affiliations_adds_previous_institution_papers():
 
 def test_research_without_llm_falls_back_to_titles():
     class TitleProvider(FakeProvider):
-        def search_publications(self, name, *, institution=None, source="zh", limit=20):
+        def search_publications(
+            self, name, *, institution=None, source="zh", discipline=None, limit=20
+        ):
             self.calls.append((name, institution, source))
             return []
 
-        def search_by_title(self, title, *, source="zh", limit=5):
+        def search_by_title(self, title, *, source="zh", discipline=None, limit=5):
             self.calls.append(("title", title, source))
             return [FakeWork(f"标题匹配:{title}", institution="西南财经大学")]
 

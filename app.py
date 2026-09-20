@@ -37,7 +37,8 @@ from advisor_fit.ingest.manual_professor import (
 from advisor_fit.ingest.profile_fallback import REQUIRED_FIELDS, build_field_report
 from advisor_fit.llm.provider import NullLLM, build_llm
 from advisor_fit.manual_pipeline import run_manual_pipeline
-from advisor_fit.providers.wanfang import WanfangProvider
+from advisor_fit.providers.disciplines import DISCIPLINE_LABELS
+from advisor_fit.providers.router import SearchRouter
 from advisor_fit.storage.cache import PageCache
 from advisor_fit.storage.repository import Repository
 from advisor_fit.storage.roster_repo import RosterRepository
@@ -198,10 +199,19 @@ def _run_research(
     search_institution: str = "",
     seed_titles: list[str] | None = None,
     known_directions: list[str] | None = None,
+    discipline: str = "",
 ) -> None:
     """用导师研究 Agent 检索并消歧，结果与确认门控写入 session_state。"""
-    provider = WanfangProvider(settings.wanfang_app_key)
-    source = None if mode == "auto" else mode
+    budget = BudgetTracker()
+    provider = SearchRouter(
+        key_values={
+            "wanfang_app_key": settings.wanfang_app_key,
+            "aminer_api_key": settings.aminer_api_key,
+        },
+        budget=budget,
+        contact_email=settings.contact_email,
+    )
+    source = mode if mode in ("zh", "en") else "auto"
     trace = RunTrace(task=f"检索导师「{name}」的候选论文")
     result = research_professor(
         _llm(),
@@ -210,15 +220,18 @@ def _run_research(
         institution=institution or None,
         english_name=english_name or None,
         source=source,
+        discipline=discipline or None,
         search_institution=search_institution or None,
         seed_titles=seed_titles or None,
         known_directions=known_directions or None,
         resume_steps=st.session_state.get("_research_steps"),
         granted_confirmations=st.session_state.get("_research_granted", []),
-        budget=BudgetTracker(),
+        budget=budget,
         trace=trace,
     )
     st.session_state["_research_degraded"] = trace.degraded_reason
+    st.session_state["_research_sources"] = provider.describe()
+    st.session_state["_research_discipline"] = provider.discipline_text()
     run_id = st.session_state.get("run_id")
     if run_id:
         try:
@@ -1026,8 +1039,8 @@ if active_page == "papers":
     st.markdown('<div class="section-note">RESEARCH CONTROLS / 检索与消歧</div>',
                 unsafe_allow_html=True)
     st.caption(
-        "Agent 先按「姓名 + 学校」查万方，查不到再用「代表论文标题」兜底（万方 → Crossref）；"
-        "结果须你勾选确认归属。"
+        "Agent 会按学科分流检索多个免费学术库（OpenAlex 打底，计算机/医学/物理等补查专业库），"
+        "跨库去掉重复后汇总；配了万方 Key 时中文库也会一起查。结果须你勾选确认归属。"
     )
     selected_mode = st.radio(
         "检索方式",
@@ -1035,6 +1048,16 @@ if active_page == "papers":
         format_func=lambda k: {"auto": "自动（推荐）", "zh": "仅中文", "en": "仅英文"}[k],
         horizontal=True,
         key="search_mode",
+    )
+    discipline_options = ["", *DISCIPLINE_LABELS]
+    selected_discipline = st.selectbox(
+        "学科方向",
+        discipline_options,
+        format_func=lambda key: (
+            "自动判断（推荐）" if key == "" else DISCIPLINE_LABELS[key]
+        ),
+        key="prof_discipline",
+        help="用来决定补查哪些专业库：计算机去 DBLP、医学去 Europe PMC 等。",
     )
     english_name = st.text_input("导师英文名（英文检索时使用，可选）", key="prof_english_name")
     search_institution = st.text_input(
@@ -1057,8 +1080,11 @@ if active_page == "papers":
 
 
     def _trigger_search() -> None:
-        if not settings.wanfang_app_key:
-            st.error("请先在 .env 里配置 WANFANG_APP_KEY（万方数据开放平台申请）")
+        if selected_mode == "zh" and not settings.wanfang_app_key:
+            st.error(
+                "「仅中文」需要一个中文库的访问 Key（在 .env 里配置 WANFANG_APP_KEY）。"
+                "不改配置的话，把「检索方式」换成「自动」，就能直接用免 Key 的国际学术库检索。"
+            )
             return
         if selected_mode == "en" and not english_name.strip():
             st.error("仅英文检索需要填写「导师英文名」")
@@ -1067,7 +1093,7 @@ if active_page == "papers":
             st.error("请先填写导师姓名")
             return
         try:
-            with st.spinner("Agent 正在检索与消歧…"):
+            with st.spinner("Agent 正在按学科分流检索与消歧…"):
                 _run_research(
                     search_name,
                     institution.strip(),
@@ -1076,6 +1102,7 @@ if active_page == "papers":
                     search_institution.strip(),
                     seed_titles,
                     faculty_directions,
+                    selected_discipline,
                 )
         except Exception as exc:  # noqa: BLE001 - 检索失败降级到手动录入
             st.error(f"检索失败（不影响手动录入）：{exc}")
@@ -1084,6 +1111,12 @@ if active_page == "papers":
 
     if st.button("🔎 一键研究（Agent）", type="primary"):
         _trigger_search()
+
+    if st.session_state.get("_research_sources"):
+        st.caption(
+            f"上次检索：{st.session_state['_research_sources']}"
+            f"（学科：{st.session_state.get('_research_discipline') or '通用'}）"
+        )
 
     if st.session_state.get("_research_degraded"):
         st.info(
@@ -1112,6 +1145,7 @@ if active_page == "papers":
             _run_research(
                 search_name, "", selected_mode, english_name.strip(),
                 search_institution.strip(), seed_titles, faculty_directions,
+                selected_discipline,
             )
         if c3.button("📋 全部保留，我手动核对", use_container_width=True):
             for paper in papers:
@@ -1170,6 +1204,10 @@ if active_page == "papers":
             cand["user_confirmed"] = st.checkbox(
                 label, value=bool(cand.get("user_confirmed")), key=f"cand_paper_{index}"
             )
+            platform = cand.get("source_platform")
+            found_in = cand.get("sources") or ([platform] if platform else [])
+            if found_in:
+                st.caption("收录于：" + "、".join(found_in))
             if cand.get("source_url"):
                 st.markdown(f"[查看原文来源 ↗]({cand['source_url']})")
 
@@ -1207,6 +1245,9 @@ if active_page == "papers":
                     or "来源待核实"
                 )
                 st.caption(f"{selected_paper.get('year') or '年份未知'}　·　{paper_source}")
+                found_in = selected_paper.get("sources") or []
+                if found_in:
+                    st.caption("收录于：" + "、".join(found_in))
                 st.markdown("**归属线索**")
                 st.write("机构：" + (selected_paper.get("institution") or "未提供，请核对原文"))
                 st.write("作者：" + "、".join(selected_paper.get("authors") or ["待核对"]))

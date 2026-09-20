@@ -16,7 +16,12 @@ class Settings(BaseSettings):
     llm_model: str = ""      # 留空则用 provider 默认模型
     llm_store: bool = False
 
+    # 可选：中文库（万方）。不配也能检索，默认主干是免费免 Key 的国际学术库。
     wanfang_app_key: str = ""
+    # 可选：AMiner 开放平台 Token（按次计费，默认在检索源表里关闭）
+    aminer_api_key: str = ""
+    # 可选：进入 OpenAlex / Crossref 的「礼貌池」用的联系邮箱，留空也能用
+    contact_email: str = ""
 
     data_dir: Path = Path("data")
     uploads_dir: Path = Path("uploads")

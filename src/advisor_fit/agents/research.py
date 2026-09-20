@@ -1,7 +1,8 @@
 """导师研究 Agent：多轮检索 + 标题兜底 + 作者消歧 + 履历调查 + 人工确认门控。
 
-检索主库为万方（中文库 OpenPeriodical/OpenConference 与英文库 OpenPeriodicalEng）；
-当按作者名查不到时，可改用「代表论文标题」检索，万方查不到再降级 Crossref。
+检索走「检索路由器」（`providers/router.py`）：按学科分流查多个免费学术库
+（OpenAlex 打底，计算机/医学/物理等补查专业库），跨库合并去重后返回候选；
+配了万方 Key 时中文库也会一起查。当按作者名查不到时，可改用「代表论文标题」检索。
 检索到的候选论文经「作者消歧」判断是否属于目标导师本人（同名作者问题）；
 若候选论文机构与填写学校不同，会做一次「履历调查」（用候选机构名二次检索），
 把「曾任职单位」的证据链补齐。所有结果仍标「待用户确认」，绝不自动认定归属。
@@ -9,6 +10,7 @@
 
 from __future__ import annotations
 
+import inspect
 from collections import Counter
 from dataclasses import dataclass, field
 
@@ -21,18 +23,23 @@ from advisor_fit.harness.trace import RunTrace
 from advisor_fit.llm.prompts import prompt_text
 from advisor_fit.llm.provider import NullLLM
 from advisor_fit.providers.academic import Work
+from advisor_fit.providers.affiliation import institutions_conflict
 from advisor_fit.providers.crossref import CrossrefProvider
-from advisor_fit.providers.wanfang import SOURCE_LABELS
 
 
 def work_to_paper(work: Work) -> dict:
     """把 Provider 的 Work 转成展示用的候选论文字典（含消歧标注字段）。"""
+    platform = getattr(work, "source_platform", None)
+    sources = list(getattr(work, "sources", None) or ([platform] if platform else []))
     return {
         "title": work.title,
         "year": work.year,
         "abstract": work.abstract or "（未提供摘要，请手动补充）",
         "source_url": work.source_url or "",
-        "source_platform": work.source_platform or "万方",
+        "source_platform": platform or (sources[0] if sources else "未知来源"),
+        "sources": sources,
+        "citation_count": getattr(work, "citation_count", None),
+        "disciplines": list(getattr(work, "disciplines", None) or []),
         "keywords": work.topics or [],
         "user_confirmed": False,
         "authors": work.authors,
@@ -60,12 +67,11 @@ _DISAMBIG_INSTRUCTIONS = prompt_text("disambiguation")
 
 
 def _institutions_conflict(paper_institution: str, institution: str | None) -> bool:
-    """规则消歧：两边机构都非空且互不包含时，视为疑似同名。"""
-    paper_institution = (paper_institution or "").strip()
-    institution = (institution or "").strip()
-    if not paper_institution or not institution:
-        return False
-    return institution not in paper_institution and paper_institution not in institution
+    """规则消歧：两边机构都非空且互不包含时，视为疑似同名。
+
+    具体规则（含"中英混排不判冲突"和高校别名词典）见 `providers/affiliation.py`。
+    """
+    return institutions_conflict(paper_institution, institution)
 
 
 def _rule_disambiguate(papers: list[dict], institution: str | None) -> list[dict]:
@@ -171,6 +177,23 @@ def disambiguate_papers(
 _SEARCH_TOOLS = {"search_by_author", "search_by_title"}
 
 
+def _supported_kwargs(provider, **kwargs) -> dict:
+    """只把 Provider 真正支持的参数传过去。
+
+    检索路由器支持 `english_name`（国际库优先用罗马化姓名），但更简单的自定义 Provider
+    可能只有基础签名；这里按签名过滤，避免因为多传一个可选参数就整轮检索失败。
+    """
+    try:
+        params = inspect.signature(provider.search_publications).parameters
+    except (TypeError, ValueError):  # pragma: no cover - 内建/装饰过的 Provider
+        params = {}
+    if not params:
+        return {key: value for key, value in kwargs.items() if key in ("institution", "source")}
+    if any(param.kind == inspect.Parameter.VAR_KEYWORD for param in params.values()):
+        return dict(kwargs)
+    return {key: value for key, value in kwargs.items() if key in params}
+
+
 def _merge_search_results(steps: list[dict]) -> list[dict]:
     """合并多轮检索结果，按标题去重，后搜到的在前。"""
     merged: dict[str, dict] = {}
@@ -221,6 +244,7 @@ def research_professor(
     seed_titles: list[str] | None = None,
     known_directions: list[str] | None = None,
     source: str | None = None,
+    discipline: str | None = None,
     max_steps: int = 6,
     resume_steps: list[dict] | None = None,
     granted_confirmations: list[str] | None = None,
@@ -231,23 +255,39 @@ def research_professor(
 
     search_institution 用于指定与「当前单位」不同的检索机构（如导师调动前的单位）。
     seed_titles 用于作者名查不到时按「代表论文标题」兜底检索。
+    discipline 用于指定学科（决定补查哪些专业库）；留空则由路由器自己判断。
     """
     crossref = CrossrefProvider()
+    self_counting = bool(getattr(provider, "counts_external_calls", False))
+    if budget is not None and hasattr(provider, "bind_budget"):
+        provider.bind_budget(budget)
 
     def _count_external() -> None:
-        if budget is not None:
-            budget.record_external_call("wanfang")
+        # 检索路由器会按"每个来源分别"记账，这里不能重复计数
+        if budget is not None and not self_counting:
+            budget.record_external_call("external")
 
-    def search_by_author(name: str, institution: str | None = None, source: str = "zh") -> dict:
+    def search_by_author(name: str, institution: str | None = None, source: str = "auto") -> dict:
         if source == "en" and english_name:
             name = english_name
         _count_external()
-        works = provider.search_publications(name, institution=institution, source=source)
+        works = provider.search_publications(
+            name,
+            **_supported_kwargs(
+                provider,
+                institution=institution,
+                source=source,
+                discipline=discipline,
+                english_name=english_name or None,
+            ),
+        )
         return {"count": len(works), "papers": [work_to_paper(work) for work in works]}
 
-    def search_by_title(title: str, source: str = "zh") -> dict:
+    def search_by_title(title: str, source: str = "auto") -> dict:
         _count_external()
-        works = provider.search_by_title(title, source=source)
+        works = provider.search_by_title(
+            title, **_supported_kwargs(provider, source=source, discipline=discipline)
+        )
         if not works:
             works = crossref.search_by_title(title)
         return {"count": len(works), "papers": [work_to_paper(work) for work in works]}
@@ -261,17 +301,18 @@ def research_professor(
             source,
             search_institution,
             seed_titles,
+            discipline=discipline,
             budget=budget,
             trace=trace,
         )
 
-    label = SOURCE_LABELS.get(source, "万方")
-    scope = f"只用 {label}" if source else "可用万方中文库（source='zh'）或英文库（source='en'）"
+    scope_fn = getattr(provider, "scope_label", None)
+    scope = scope_fn(source) if callable(scope_fn) else "可用当前的学术检索来源"
     task = (
         f"检索导师「{name}」的论文。学校/单位：{institution or '未提供'}。"
         f"备选检索机构：{search_institution or '无'}。"
         f"导师英文名（可能为空）：{english_name or '无'}。"
-        f"检索范围：{scope}。"
+        f"本次可用的检索来源：{scope}。"
         "已先按「姓名+学校」和「代表论文标题」查过若干轮（见 history）。"
         "作者名查不到时用 search_by_title 按论文标题兜底；"
         "结果太少时去掉学校重试（institution 传空字符串），"
@@ -282,13 +323,13 @@ def research_professor(
     registry.register(
         ToolSpec(
             name="search_by_author",
-            description="按姓名+学校检索万方候选论文",
+            description="按姓名+学校在多个学术库中检索候选论文",
             parameters={
                 "type": "object",
                 "properties": {
                     "name": {"type": "string"},
                     "institution": {"type": ["string", "null"]},
-                    "source": {"type": "string", "enum": ["zh", "en"]},
+                    "source": {"type": "string", "enum": ["auto", "zh", "en"]},
                 },
                 "required": ["name"],
             },
@@ -303,12 +344,12 @@ def research_professor(
     registry.register(
         ToolSpec(
             name="search_by_title",
-            description="按论文标题检索（万方查不到降级 Crossref）",
+            description="按论文标题检索（多个学术库 + Crossref 兜底）",
             parameters={
                 "type": "object",
                 "properties": {
                     "title": {"type": "string"},
-                    "source": {"type": "string", "enum": ["zh", "en"]},
+                    "source": {"type": "string", "enum": ["auto", "zh", "en"]},
                 },
                 "required": ["title"],
             },
@@ -324,7 +365,7 @@ def research_professor(
     # 预热：确定性先查一轮，交给 LLM 判断是否扩搜/换库。
     seed_steps: list[dict] = []
     if resume_steps is None:
-        seed_source = source or "zh"
+        seed_source = source or "auto"
         primary_inst = search_institution or institution
         if primary_inst:
             result = search_by_author(name, primary_inst, seed_source)
@@ -387,7 +428,8 @@ def research_professor(
         known_directions=known_directions,
     )
     papers = _investigate_affiliations(
-        provider, name, papers, institution, source or "zh", english_name
+        provider, name, papers, institution, source or "auto", english_name,
+        discipline=discipline,
     )
     return ResearchResult(papers=papers, log=steps, trace=trace)
 
@@ -399,6 +441,8 @@ def _investigate_affiliations(
     primary_institution: str | None,
     source: str,
     english_name: str | None,
+    *,
+    discipline: str | None = None,
 ) -> list[dict]:
     """履历调查：对「机构与填写学校不同」的候选，用候选机构名二次检索，补「曾任职单位」证据。"""
     alt_counts: dict[str, int] = {}
@@ -413,7 +457,14 @@ def _investigate_affiliations(
     for inst in sorted(alt_counts, key=alt_counts.get, reverse=True)[:2]:
         try:
             works = provider.search_publications(
-                english_name or name, institution=inst, source=source
+                english_name or name,
+                **_supported_kwargs(
+                    provider,
+                    institution=inst,
+                    source=source,
+                    discipline=discipline,
+                    english_name=english_name or None,
+                ),
             )
         except Exception:  # noqa: BLE001 - 履历调查失败不阻断主流程
             continue
@@ -435,26 +486,36 @@ def _research_without_llm(
     search_institution: str | None,
     seed_titles: list[str] | None,
     *,
+    discipline: str | None = None,
     budget: BudgetTracker | None = None,
     trace: RunTrace | None = None,
 ) -> ResearchResult:
     """无 LLM 时：确定性检索（机构 → 备选机构 → 标题兜底）+ 机构规则消歧。"""
+    self_counting = bool(getattr(provider, "counts_external_calls", False))
 
     def _count() -> None:
-        if budget is not None:
-            budget.record_external_call("wanfang")
+        if budget is not None and not self_counting:
+            budget.record_external_call("external")
 
     papers: list[dict] = []
     for inst in (search_institution, institution):
         if not inst:
             continue
         _count()
-        works = provider.search_publications(name, institution=inst, source=source or "zh")
+        works = provider.search_publications(
+            name,
+            **_supported_kwargs(
+                provider, institution=inst, source=source or "auto", discipline=discipline
+            ),
+        )
         papers.extend(work_to_paper(work) for work in works)
     if len(papers) < 3:
         for title in (seed_titles or [])[:5]:
             _count()
-            works = provider.search_by_title(title, source=source or "zh")
+            works = provider.search_by_title(
+                title,
+                **_supported_kwargs(provider, source=source or "auto", discipline=discipline),
+            )
             if not works:
                 works = crossref.search_by_title(title)
             papers.extend(work_to_paper(work) for work in works)

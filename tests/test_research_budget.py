@@ -20,6 +20,9 @@ class FakeWork:
         self.authors = authors or []
         self.institution = institution
         self.venue = ""
+        self.sources = []
+        self.disciplines = []
+        self.citation_count = None
 
 
 class FakeProvider:
@@ -27,11 +30,13 @@ class FakeProvider:
         self.works = works or []
         self.calls = []
 
-    def search_publications(self, name, *, institution=None, source="zh", limit=20):
+    def search_publications(
+        self, name, *, institution=None, source="zh", discipline=None, limit=20
+    ):
         self.calls.append((name, institution, source))
         return self.works
 
-    def search_by_title(self, title, *, source="zh", limit=5):
+    def search_by_title(self, title, *, source="zh", discipline=None, limit=5):
         self.calls.append(("title", title, source))
         return self.works
 

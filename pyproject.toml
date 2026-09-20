@@ -4,6 +4,7 @@ version = "0.2.0"
 description = "证据驱动的导师理解与匹配助手 MVP：单导师研究、人工身份确认、受控邮件草稿"
 readme = "README.md"
 requires-python = ">=3.12"
+license = { text = "MIT" }
 dependencies = [
     "streamlit>=1.40",
     "pydantic>=2.7",

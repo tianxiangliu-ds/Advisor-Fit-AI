@@ -22,7 +22,9 @@
 
 **开源发布准备**
 
+- **采用 MIT 许可证**（见 `LICENSE`），README 增加许可证与免责说明
 - 面向使用者的 README（截图 + 一句话价值 + 快速开始）与可复现的界面截图
+- README 补上「Agent 的每一步都看得见」：把运行轨迹截进界面一览
 - 数据备份（命令行 + 页面下载）、上传简历清理规则、版本号显示与一致性检查、GitHub CI
 - **在线 Demo 一键部署**：`streamlit_app.py` 演示入口（自动生成全部虚构的演示数据）
   + `requirements.txt`（从 pyproject 同步）+ `Dockerfile` + Streamlit Community Cloud 说明

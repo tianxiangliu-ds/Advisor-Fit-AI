@@ -1,0 +1,102 @@
+{
+  "generated_at": "2026-09-20 23:30:53",
+  "metrics": [
+    {
+      "key": "disambig.precision",
+      "label": "消歧准确率（规则基线，观察值）",
+      "value": 0.46601941747572817,
+      "unit": "%",
+      "higher_is_better": true,
+      "gate": null,
+      "detail": "11 位导师 / tp=48 fp=55 fn=0",
+      "passed": true
+    },
+    {
+      "key": "disambig.recall",
+      "label": "消歧召回率（规则基线）",
+      "value": 1.0,
+      "unit": "%",
+      "higher_is_better": true,
+      "gate": 0.9,
+      "detail": "11 位导师 / tp=48 fp=55 fn=0",
+      "passed": true
+    },
+    {
+      "key": "disambig.f1",
+      "label": "消歧 F1（规则基线，观察值）",
+      "value": 0.6357615894039735,
+      "unit": "%",
+      "higher_is_better": true,
+      "gate": null,
+      "detail": "11 位导师 / tp=48 fp=55 fn=0",
+      "passed": true
+    },
+    {
+      "key": "claims.accuracy",
+      "label": "Claim–Evidence 判定一致率",
+      "value": 1.0,
+      "unit": "%",
+      "higher_is_better": true,
+      "gate": 1.0,
+      "detail": "3/3 条与金标一致",
+      "passed": true
+    },
+    {
+      "key": "claims.unsupported_detected",
+      "label": "无证据声明被拦下数",
+      "value": 2.0,
+      "unit": "count",
+      "higher_is_better": true,
+      "gate": null,
+      "detail": "金标里标注为「不应通过」的条数（应被拦住）",
+      "passed": true
+    },
+    {
+      "key": "match.determinism",
+      "label": "匹配结果确定性",
+      "value": 1.0,
+      "unit": "",
+      "higher_is_better": true,
+      "gate": 1.0,
+      "detail": "同一份输入连跑两次必须完全一致",
+      "passed": true
+    },
+    {
+      "key": "match.monotonic",
+      "label": "匹配单调性",
+      "value": 1.0,
+      "unit": "",
+      "higher_is_better": true,
+      "gate": 1.0,
+      "detail": "无交集的缺口数 2 必须多于有交集的 1",
+      "passed": true
+    },
+    {
+      "key": "prompts.registered",
+      "label": "已登记提示词",
+      "value": 10.0,
+      "unit": "count",
+      "higher_is_better": true,
+      "gate": 10.0,
+      "detail": "提示词集中在 llm/prompts.py 管理，不在业务代码里散落",
+      "passed": true
+    },
+    {
+      "key": "prompts.usable",
+      "label": "提示词可用率",
+      "value": 1.0,
+      "unit": "%",
+      "higher_is_better": true,
+      "gate": 1.0,
+      "detail": "10/10 条非空且带版本号",
+      "passed": true
+    }
+  ],
+  "skipped": [
+    {
+      "key": "llm.disambig",
+      "reason": "未配置 LLM_API_KEY，真实模型消歧评测跳过（规则基线已跑）"
+    }
+  ],
+  "gates_passed": true
+}

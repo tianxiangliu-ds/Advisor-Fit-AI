@@ -190,12 +190,45 @@ Harness 就是干这个的：**给模型自由，同时把自由关在笼子里�
 
 ## 评测
 
-- `evals/disambiguation_golden.jsonl`：作者消歧金标集，量化 precision / recall / F1；
-- `evals/gold_claims.jsonl`：Claim–Evidence 覆盖；
-- `scripts/run_evals.py`、`scripts/run_disambiguation_evals.py`：一键跑；
-- `scripts/verify_features.py`：把各阶段新增能力逐项跑一遍，输出中文结果；
-- 测试：**54 个测试文件 / 528 条用例**，覆盖 Harness 契约、预算闸门、轨迹、
-  工具契约、消歧、证据校验、离线流程、界面。
+四个维度各有一组可量化指标，统一入口是 `scripts/run_all_evals.py`：
+
+| 维度 | 指标 | 门线 |
+|---|---|---|
+| 实体消歧准确性 | 规则基线 precision / recall / F1 | **只卡召回 ≥ 90%**（见下） |
+| Evidence 覆盖率 | Claim–Evidence 判定一致率、无证据声明被拦下数 | 一致率 100% |
+| 匹配一致性 | 结果确定性、单调性 | 两项均须 1.0 |
+| LLM 输出可靠性 | 提示词登记数、可用率；有 Key 时加跑真实模型消歧 | 可用率 100% |
+
+**为什么规则基线只卡召回**：规则路径不排除任何论文，只把机构对不上的标成
+"需人工复核"，所以它的 precision 恰好等于金标里的正例比例——那是**下限而不是
+成绩**。门线压在 precision 上会永远失败。提精度是 LLM 与人工确认的活，
+规则基线的职责是"别漏人"。
+
+**为什么单调性看缺口而不是强项**：`MatchReport.strengths` 里混着「技能覆盖」
+「证据充分度」这类与研究方向无关的通用条目，两份输入都会拿到同样条数，
+拿它比较是恒真的假指标。真正随交集变化的是 `gaps`——没有交集时会多出
+「未覆盖：XXX」。
+
+```powershell
+# 跑一遍离线指标（不需要 Key、不联网）
+.\.venv\Scripts\python.exe scripts\run_all_evals.py
+
+# 存基线；之后 --compare 会逐项报出变化，回归时退出码 1（可直接挂 CI）
+.\.venv\Scripts\python.exe scripts\run_all_evals.py --save-baseline
+.\.venv\Scripts\python.exe scripts\run_all_evals.py --compare
+```
+
+**缺 Key 时是跳过并说明原因，不是整轮失败**——需要真实模型的评测会标成
+`llm.disambig: 未配置 LLM_API_KEY…`，其余指标照常跑完。这与
+`CLAUDE.md` 的「默认主干必须免费免 Key」一致。
+
+另有两个专项脚本：
+- `scripts/run_disambiguation_evals.py`：只看消歧，可 `--rule` 跑规则基线对比；
+- `scripts/verify_features.py`：把各阶段新增能力逐项跑一遍，输出中文结果。
+
+数据：`evals/disambiguation_golden.jsonl`（11 位导师）、`evals/gold_claims.jsonl`。
+测试：**54 个测试文件 / 543 条用例**，覆盖 Harness 契约、预算闸门、轨迹、
+工具契约、消歧、证据校验、匹配、评测自身、离线流程、界面。
 
 ---
 

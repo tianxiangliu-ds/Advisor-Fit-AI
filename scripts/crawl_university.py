@@ -167,7 +167,8 @@ def _unit_links(html: str, base_url: str) -> list[str]:
         if not _GRAD_UNIT_RE.match(raw):
             continue
         name = _normalize_unit_name(raw)
-        if len(name) < 3 or name in seen:
+        # 单位名不会很长；超过 25 字说明这行是新闻标题之类的长文本，不是培养单位
+        if len(name) < 3 or len(name) > 25 or name in seen:
             continue
         seen.add(name)
         units.append(name)
@@ -476,12 +477,78 @@ def discover_colleges(
     return _expand_generic_entries(best, client=client, timeout=timeout)
 
 
-def find_faculty_page(college_url: str, *, client=None, timeout: float = 20.0) -> str:
-    """在学院主页里找「师资队伍」入口。"""
-    try:
-        html = _fetch_with_fallback(college_url, client=client, timeout=timeout)
-    except Exception:  # noqa: BLE001 - 单个学院失败不影响整体
-        return ""
+def _site_root(host: str) -> str:
+    """取可注册域名：www.xjtu.edu.cn / math.xjtu.edu.cn -> xjtu.edu.cn。"""
+    parts = host.split(".")
+    if len(parts) >= 3 and parts[-1] == "cn" and parts[-2] in ("edu", "com", "gov", "org", "net"):
+        return ".".join(parts[-3:])
+    return ".".join(parts[-2:])
+
+
+# 学院简介页上指向「学院自己的网站」的链接文字
+ENTER_KEYS = ("进入", "学院主页", "学院网站", "学院官网", "学院首页", "网站首页")
+
+
+def resolve_college_site(
+    college: str, url: str, home: str, *, client=None, timeout: float = 20.0
+) -> tuple[str, str]:
+    """学院页若只是学校主站的简介页，找出学院自己的网站。
+
+    很多学校（如西安交大）的「院系设置」只链到主站的学院简介页，真正有师资队伍的
+    学院网站挂在另一台子域上（如 math.xjtu.edu.cn），简介页底部通常写着
+    「进入XX学院」。不跟进这一层，就会退回到学校总师资页，导致**每个学院都抓到
+    同一个页面**——实测西安交大 41 个学院里有 37 个就是这样变成 0 人的。
+
+    返回（学院网站, 该页 HTML）。
+    """
+    html = _fetch_with_fallback(url, client=client, timeout=timeout)
+    src_host = urlparse(url).netloc
+    home_host = urlparse(home).netloc
+    if not home_host or src_host != home_host:
+        return url, html  # 已经是学院自己的网站，不用再找
+
+    root = _site_root(home_host)
+    best, best_score = "", 0
+    for link in extract_links(html, url):
+        host = urlparse(link["href"]).netloc
+        if not host or host == src_host or not host.endswith(root):
+            continue
+        text = re.sub(r"\s+", "", link["text"])
+        score = 0
+        if any(key in text for key in ENTER_KEYS):
+            score += 3
+        if college and college[:3] in text:
+            score += 2
+        if host.count(".") >= 3:  # 子域名比主站更像学院自己的站
+            score += 1
+        if score > best_score:
+            best, best_score = link["href"], score
+    if best and best_score >= 2:
+        try:
+            return best, _fetch_with_fallback(best, client=client, timeout=timeout)
+        except Exception:  # noqa: BLE001 - 新站取不到就退回原页
+            return url, html
+    return url, html
+
+
+def find_faculty_page(
+    college_url: str, *, client=None, timeout: float = 20.0,
+    college: str = "", home: str = "",
+) -> str:
+    """在学院主页里找「师资队伍」入口。
+
+    给了 `home` 时会先确认这是不是学院自己的网站——不是则先跳过去，避免在学校
+    主站里打转、最后退回到学校总师资页。
+    """
+    if home:
+        college_url, html = resolve_college_site(
+            college, college_url, home, client=client, timeout=timeout
+        )
+    else:
+        try:
+            html = _fetch_with_fallback(college_url, client=client, timeout=timeout)
+        except Exception:  # noqa: BLE001 - 单个学院失败不影响整体
+            return ""
     links = extract_links(html, college_url)
     for key in FACULTY_KEYS:
         for link in links:
@@ -928,10 +995,13 @@ def crawl_college(
     delay: float,
     timeout: float = 20.0,
     details_per_college: int = 0,
+    home: str = "",
 ) -> CollegeResult:
     result = CollegeResult(college=college)
     try:
-        list_url = find_faculty_page(url, client=client, timeout=timeout)
+        list_url = find_faculty_page(
+            url, client=client, timeout=timeout, college=college, home=home
+        )
     except Exception as exc:  # noqa: BLE001
         result.note = f"找师资页失败：{type(exc).__name__}"
         return result
@@ -1062,7 +1132,8 @@ def crawl_university(
         if outcome is None:
             time.sleep(delay)
             outcome = crawl_college(
-                name, url, client=client, delay=delay, details_per_college=details_per_college
+                name, url, client=client, delay=delay,
+                details_per_college=details_per_college, home=home,
             )
             if checkpoint:
                 checkpoint.parent.mkdir(parents=True, exist_ok=True)

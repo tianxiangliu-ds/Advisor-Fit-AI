@@ -101,7 +101,13 @@ def merge_into(target: Advisor, extra: Advisor, source: str) -> Advisor:
             merged.field_sources[field] = source
 
     for field in ("source_url", "retrieved_at", "content_hash"):
-        if _is_empty(getattr(merged, field)) and not _is_empty(getattr(extra, field)):
+        current = getattr(merged, field)
+        incoming = getattr(extra, field)
+        source_placeholder = (
+            field == "source_url" and incoming.startswith(("http://", "https://"))
+            and not current.startswith(("http://", "https://"))
+        )
+        if (_is_empty(current) or source_placeholder) and not _is_empty(incoming):
             setattr(merged, field, getattr(extra, field))
 
     for item in extra.sources or [source]:

@@ -157,6 +157,32 @@ def test_research_professor_surfaces_confirmation_gate():
     assert result.needs_confirmation == "请确认是否只保留武汉大学的论文"
 
 
+def test_research_professor_offers_the_full_toolbox_and_records_it():
+    """Agent 手里必须有 4 个工具，且这次提供的清单要进轨迹。
+
+    只记"实际调用了什么"看不出它当时有哪些选择；轨迹里的 tools 是复盘
+    "为什么没选另一个工具"的依据。
+    """
+    from advisor_fit.agents.tools import tool_names
+    from advisor_fit.harness.trace import RunTrace
+
+    provider = FakeProvider([FakeWork("一篇论文", institution="武汉大学")])
+    trace = RunTrace(task="t")
+    research_professor(
+        FakeLLM([AgentDecision(action="done", message="够了")]),
+        provider,
+        name="陆伟",
+        institution="武汉大学",
+        source="zh",
+        trace=trace,
+    )
+
+    offered = [spec["name"] for spec in trace.tools]
+    assert sorted(offered) == sorted(tool_names())
+    assert "fetch_professor_homepage" in offered
+    assert "check_paper_affiliations" in offered
+
+
 def test_research_professor_runs_loop_and_disambiguates():
     from advisor_fit.agents.research import DisambiguationOutput, PaperVerdict
 

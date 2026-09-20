@@ -16,9 +16,13 @@ from dataclasses import dataclass, field
 
 from pydantic import BaseModel
 
+from advisor_fit.agents.tools import (
+    build_registry,
+    make_affiliation_tool,
+    make_homepage_tool,
+)
 from advisor_fit.harness.budget import BudgetTracker
 from advisor_fit.harness.loop import run_loop
-from advisor_fit.harness.tools import RetryPolicy, ToolRegistry, ToolSpec
 from advisor_fit.harness.trace import RunTrace
 from advisor_fit.llm.prompts import prompt_text
 from advisor_fit.llm.provider import NullLLM
@@ -267,6 +271,13 @@ def research_professor(
         if budget is not None and not self_counting:
             budget.record_external_call("external")
 
+    # 边查边累积的候选集：`check_paper_affiliations` 工具靠它读"当前"候选，
+    # 而不是等整轮跑完再汇总。
+    collected_papers: list[dict] = []
+
+    def _collect(papers: list[dict]) -> None:
+        collected_papers[:] = _dedupe_papers([*collected_papers, *papers])
+
     def search_by_author(name: str, institution: str | None = None, source: str = "auto") -> dict:
         if source == "en" and english_name:
             name = english_name
@@ -281,7 +292,9 @@ def research_professor(
                 english_name=english_name or None,
             ),
         )
-        return {"count": len(works), "papers": [work_to_paper(work) for work in works]}
+        papers = [work_to_paper(work) for work in works]
+        _collect(papers)
+        return {"count": len(works), "papers": papers}
 
     def search_by_title(title: str, source: str = "auto") -> dict:
         _count_external()
@@ -290,7 +303,9 @@ def research_professor(
         )
         if not works:
             works = crossref.search_by_title(title)
-        return {"count": len(works), "papers": [work_to_paper(work) for work in works]}
+        papers = [work_to_paper(work) for work in works]
+        _collect(papers)
+        return {"count": len(works), "papers": papers}
 
     if isinstance(llm, NullLLM):
         return _research_without_llm(
@@ -317,49 +332,23 @@ def research_professor(
         "作者名查不到时用 search_by_title 按论文标题兜底；"
         "结果太少时去掉学校重试（institution 传空字符串），"
         "或（在提供英文名时）切到 source='en' 用英文名再查。"
+        "想确认这人到底研究什么、或论文一直查不到时，"
+        "用 fetch_professor_homepage 打开他的个人主页看看。"
+        "对候选取舍拿不准时用 check_paper_affiliations 核对机构一致性。"
         "若候选论文机构与学校明显不符、疑似同名作者，请求人工确认后再继续。"
     )
-    registry = ToolRegistry()
-    registry.register(
-        ToolSpec(
-            name="search_by_author",
-            description="按姓名+学校在多个学术库中检索候选论文",
-            parameters={
-                "type": "object",
-                "properties": {
-                    "name": {"type": "string"},
-                    "institution": {"type": ["string", "null"]},
-                    "source": {"type": "string", "enum": ["auto", "zh", "en"]},
-                },
-                "required": ["name"],
-            },
-            permission="network",
-            rate_limit_per_run=4,
-            cache_ttl_seconds=86_400,
-            timeout_seconds=20.0,
-            retry=RetryPolicy(max_attempts=2, backoff_seconds=0.5),
-        ),
-        search_by_author,
-    )
-    registry.register(
-        ToolSpec(
-            name="search_by_title",
-            description="按论文标题检索（多个学术库 + Crossref 兜底）",
-            parameters={
-                "type": "object",
-                "properties": {
-                    "title": {"type": "string"},
-                    "source": {"type": "string", "enum": ["auto", "zh", "en"]},
-                },
-                "required": ["title"],
-            },
-            permission="network",
-            rate_limit_per_run=6,
-            cache_ttl_seconds=86_400,
-            timeout_seconds=20.0,
-            retry=RetryPolicy(max_attempts=2, backoff_seconds=0.5),
-        ),
-        search_by_title,
+
+    # 工具契约集中在 agents/tools.py 声明，这里只提供实现。
+    # 候选集是每轮变的，所以用 papers_provider 让工具在调用时才取。
+    registry = build_registry(
+        {
+            "search_by_author": search_by_author,
+            "search_by_title": search_by_title,
+            "fetch_professor_homepage": make_homepage_tool(),
+            "check_paper_affiliations": make_affiliation_tool(
+                lambda: collected_papers, institution=search_institution or institution or ""
+            ),
+        }
     )
 
     # 预热：确定性先查一轮，交给 LLM 判断是否扩搜/换库。

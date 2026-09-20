@@ -35,7 +35,7 @@ sys.path.insert(0, str(ROOT / "src"))
 
 from advisor_fit.config import settings  # noqa: E402
 from advisor_fit.ingest.cv import looks_like_chinese_name  # noqa: E402
-from advisor_fit.ingest.faculty import extract_links, fetch_html  # noqa: E402
+from advisor_fit.ingest.faculty import build_client, extract_links, fetch_html  # noqa: E402
 from advisor_fit.ingest.homepage import html_to_text  # noqa: E402
 from advisor_fit.ingest.supervisor_roster import RosterEntry  # noqa: E402
 from advisor_fit.storage.roster_repo import RosterRepository  # noqa: E402
@@ -74,6 +74,11 @@ FACULTY_KEYS = (
     "师资队伍", "师资力量", "师资概况", "师资介绍", "教师队伍", "教师名录",
     "专任教师", "专职教师", "导师队伍", "导师介绍", "全体教师", "教师介绍", "师资",
 )
+# 「学校概况」这类二级入口，用于再找一层院系目录
+OVERVIEW_KEYS = (
+    "学校概况", "学校简介", "学校介绍", "本校概况", "大学概况", "学校基本信息",
+    "组织机构", "机构设置", "院系设置",
+)
 # 明显不是人名的词，避免把导航项当成导师。
 # 注意：像「党群工作」「国际交流」「武大主页」这种，首字（党/国/武）本身就是姓氏，
 # 光靠"首字是姓氏"滤不掉，必须显式列出来。
@@ -109,23 +114,37 @@ def _norm(url: str, base: str) -> str:
     return urljoin(base, url)
 
 
-def discover_colleges(home: str, *, timeout: float = 20.0) -> list[tuple[str, str]]:
-    """从学校首页找到「院系设置」页，再取出各学院（名称, 链接）。"""
-    home_html = fetch_html(home, timeout=timeout)
-    dir_url = ""
-    for link in extract_links(home_html, home):
-        if any(key in link["text"] for key in COLLEGE_DIR_KEYS):
-            dir_url = link["href"]
-            break
-    if not dir_url:
-        return []
+def _dedupe(urls: list[str]) -> list[str]:
+    out: list[str] = []
+    seen: set[str] = set()
+    for url in urls:
+        if url and url not in seen:
+            seen.add(url)
+            out.append(url)
+    return out
 
-    dir_html = fetch_html(dir_url, timeout=timeout)
+
+def candidate_dir_urls(html: str, base: str) -> list[str]:
+    """收集所有可能是「院系设置」入口的链接，强的排前面。"""
+    strong: list[str] = []
+    weak: list[str] = []
+    for link in extract_links(html, base):
+        text = re.sub(r"\s+", "", link["text"])
+        if any(key in text for key in COLLEGE_DIR_KEYS):
+            strong.append(link["href"])
+            continue
+        path = urlparse(link["href"]).path.lower()
+        if any(token in path for token in ("yxsz", "jgsz", "yuanxi", "college", "school")):
+            weak.append(link["href"])
+    return _dedupe(strong + weak)
+
+
+def _college_links(html: str, base: str) -> list[tuple[str, str]]:
     colleges: list[tuple[str, str]] = []
     seen: set[str] = set()
-    for link in extract_links(dir_html, dir_url):
+    for link in extract_links(html, base):
         text = re.sub(r"\s+", "", link["text"])
-        if not (2 <= len(text) <= 14):
+        if not (2 <= len(text) <= 16):
             continue
         if not any(key in text for key in ("学院", "学部", "学系", "研究院", "研究中心", "实验室")):
             continue
@@ -136,10 +155,61 @@ def discover_colleges(home: str, *, timeout: float = 20.0) -> list[tuple[str, st
     return colleges
 
 
-def find_faculty_page(college_url: str, *, timeout: float = 20.0) -> str:
+def discover_colleges(
+    home: str, *, client=None, timeout: float = 20.0
+) -> list[tuple[str, str]]:
+    """从学校首页找到各学院（名称, 链接）。
+
+    高校站点命名差异极大，所以这里做多轮尝试：
+    ① 首页本身如果就列了学院，直接用；
+    ② 依次尝试首页里所有像「院系设置」的入口，取效果最好的一个；
+    ③ 还不行就从「学校概况」这类页面再找一层。
+    """
+    home_html = fetch_html(home, client=client, timeout=timeout)
+    best = _college_links(home_html, home)
+    if len(best) >= 5:
+        return best
+
+    for url in candidate_dir_urls(home_html, home)[:6]:
+        try:
+            html = fetch_html(url, client=client, timeout=timeout)
+        except Exception:  # noqa: BLE001 - 单个入口失败就试下一个
+            continue
+        links = _college_links(html, url)
+        if len(links) > len(best):
+            best = links
+        if len(best) >= 10:
+            return best
+
+    if len(best) >= 3:
+        return best
+
+    # 二级：先进入「学校概况 / 组织机构」这类页面，再从里面找院系入口
+    for link in extract_links(home_html, home):
+        text = re.sub(r"\s+", "", link["text"])
+        if not any(key in text for key in OVERVIEW_KEYS):
+            continue
+        try:
+            overview_html = fetch_html(link["href"], client=client, timeout=timeout)
+        except Exception:  # noqa: BLE001
+            continue
+        for url in candidate_dir_urls(overview_html, link["href"])[:4]:
+            try:
+                html = fetch_html(url, client=client, timeout=timeout)
+            except Exception:  # noqa: BLE001
+                continue
+            links = _college_links(html, url)
+            if len(links) > len(best):
+                best = links
+        if len(best) >= 3:
+            break
+    return best
+
+
+def find_faculty_page(college_url: str, *, client=None, timeout: float = 20.0) -> str:
     """在学院主页里找「师资队伍」入口。"""
     try:
-        html = fetch_html(college_url, timeout=timeout)
+        html = fetch_html(college_url, client=client, timeout=timeout)
     except Exception:  # noqa: BLE001 - 单个学院失败不影响整体
         return ""
     links = extract_links(html, college_url)
@@ -176,10 +246,12 @@ def extract_names(html: str, base_url: str) -> list[str]:
     return names
 
 
-def crawl_college(college: str, url: str, *, delay: float, timeout: float = 20.0) -> CollegeResult:
+def crawl_college(
+    college: str, url: str, *, client=None, delay: float, timeout: float = 20.0
+) -> CollegeResult:
     result = CollegeResult(college=college)
     try:
-        list_url = find_faculty_page(url, timeout=timeout)
+        list_url = find_faculty_page(url, client=client, timeout=timeout)
     except Exception as exc:  # noqa: BLE001
         result.note = f"找师资页失败：{type(exc).__name__}"
         return result
@@ -190,7 +262,7 @@ def crawl_college(college: str, url: str, *, delay: float, timeout: float = 20.0
     result.list_url = list_url
     try:
         time.sleep(delay)
-        html = fetch_html(list_url, timeout=timeout)
+        html = fetch_html(list_url, client=client, timeout=timeout)
     except Exception as exc:  # noqa: BLE001
         result.note = f"抓师资页失败：{type(exc).__name__}"
         return result
@@ -204,7 +276,7 @@ def crawl_college(college: str, url: str, *, delay: float, timeout: float = 20.0
                 continue
             try:
                 time.sleep(delay)
-                sub_html = fetch_html(link["href"], timeout=timeout)
+                sub_html = fetch_html(link["href"], client=client, timeout=timeout)
             except Exception:  # noqa: BLE001
                 continue
             sub_names = extract_names(sub_html, link["href"])
@@ -227,12 +299,13 @@ def crawl_university(
     university: str,
     home: str,
     *,
+    client=None,
     delay: float = 1.0,
     discover_only: bool = False,
     max_colleges: int = 0,
 ) -> list[CollegeResult]:
     print(f"\n{'=' * 70}\n【{university}】{home}\n{'=' * 70}", flush=True)
-    colleges = discover_colleges(home)
+    colleges = discover_colleges(home, client=client)
     print(f"发现学院：{len(colleges)} 个", flush=True)
     if max_colleges:
         colleges = colleges[:max_colleges]
@@ -244,7 +317,7 @@ def crawl_university(
     results: list[CollegeResult] = []
     for index, (name, url) in enumerate(colleges, 1):
         time.sleep(delay)
-        outcome = crawl_college(name, url, delay=delay)
+        outcome = crawl_college(name, url, client=client, delay=delay)
         results.append(outcome)
         if outcome.names:
             print(f"  [{index}/{len(colleges)}] {name}：{len(outcome.names)} 位", flush=True)
@@ -317,40 +390,48 @@ def main() -> int:
     parser.add_argument("--university", default="武汉大学")
     parser.add_argument("--home", default="")
     parser.add_argument("--all", action="store_true", help="跑内置的全部 top20")
+    parser.add_argument("--only", default="", help="只跑这些学校，用逗号分隔")
     parser.add_argument("--discover-only", action="store_true")
     parser.add_argument("--delay", type=float, default=1.0, help="每次请求间隔秒数")
     parser.add_argument("--max-colleges", type=int, default=0)
     args = parser.parse_args()
 
-    targets = (
-        list(UNIVERSITIES.items())
-        if args.all
-        else [(args.university, args.home or UNIVERSITIES.get(args.university, ""))]
-    )
+    if args.only:
+        wanted = [name.strip() for name in args.only.split(",") if name.strip()]
+        targets = [(name, UNIVERSITIES.get(name, "")) for name in wanted]
+    elif args.all:
+        targets = list(UNIVERSITIES.items())
+    else:
+        targets = [(args.university, args.home or UNIVERSITIES.get(args.university, ""))]
 
     total = 0
-    for university, home in targets:
-        if not home:
-            print(f"没有 {university} 的官网地址，请用 --home 指定")
-            continue
-        try:
-            results = crawl_university(
-                university,
-                home,
-                delay=args.delay,
-                discover_only=args.discover_only,
-                max_colleges=args.max_colleges,
-            )
-        except Exception as exc:  # noqa: BLE001 - 单所学校失败不影响其它
-            print(f"  {university} 整体失败：{type(exc).__name__}: {exc}", flush=True)
-            continue
-        if args.discover_only:
-            continue
-        saved = save(university, results)
-        total += saved
-        hit = sum(1 for item in results if item.names)
-        print(f"  → {university}：{hit}/{len(results)} 个学院采到名单", flush=True)
-        print(f"     共 {saved} 位导师", flush=True)
+    client = build_client()
+    try:
+        for university, home in targets:
+            if not home:
+                print(f"没有 {university} 的官网地址，请用 --home 指定")
+                continue
+            try:
+                results = crawl_university(
+                    university,
+                    home,
+                    client=client,
+                    delay=args.delay,
+                    discover_only=args.discover_only,
+                    max_colleges=args.max_colleges,
+                )
+            except Exception as exc:  # noqa: BLE001 - 单所学校失败不影响其它
+                print(f"  {university} 整体失败：{type(exc).__name__}: {exc}", flush=True)
+                continue
+            if args.discover_only:
+                continue
+            saved = save(university, results)
+            total += saved
+            hit = sum(1 for item in results if item.names)
+            print(f"  → {university}：{hit}/{len(results)} 个学院采到名单", flush=True)
+            print(f"     共 {saved} 位导师", flush=True)
+    finally:
+        client.close()
 
     if not args.discover_only:
         print(f"\n合计写入 {total} 位官网导师")

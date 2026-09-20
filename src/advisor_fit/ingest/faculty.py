@@ -79,12 +79,23 @@ _LIST_INSTRUCTIONS = prompt_text("faculty_list")
 _PAGE_INSTRUCTIONS = prompt_text("faculty_page")
 
 
+_BROWSER_HEADERS = {
+    "User-Agent": (
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
+        " (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
+    ),
+    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+    "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
+}
+
+
+def build_client(timeout: float = 20.0) -> httpx.Client:
+    """统一的浏览器式客户端：复用连接与 Cookie，减少被 412/403 拦掉的概率。"""
+    return httpx.Client(timeout=timeout, follow_redirects=True, headers=_BROWSER_HEADERS)
+
+
 def fetch_html(url: str, *, client: httpx.Client | None = None, timeout: float = 20.0) -> str:
-    client = client or httpx.Client(
-        timeout=timeout,
-        follow_redirects=True,
-        headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"},
-    )
+    client = client or build_client(timeout)
     resp = client.get(url)
     resp.raise_for_status()
     return resp.text

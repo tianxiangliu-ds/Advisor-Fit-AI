@@ -12,6 +12,7 @@ from html.parser import HTMLParser
 import httpx
 from pydantic import BaseModel
 
+from advisor_fit.ingest.fetch import Fetcher
 from advisor_fit.llm.prompts import prompt_text
 
 _EMAIL_RE = re.compile(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}")
@@ -125,9 +126,17 @@ def parse_homepage(text: str, llm, *, title: str = "") -> HomepageProfile:
     return output
 
 
-def extract_homepage_profile(url: str, llm) -> HomepageProfile:
-    """抓取主页并提取结构化信息（一步到位，供应用层调用）。"""
-    html = fetch_homepage(url)
-    title = extract_title(html)
-    text = html_to_text(html)
+def extract_homepage_profile(
+    url: str, llm, *, fetcher: Fetcher | None = None
+) -> HomepageProfile:
+    """抓取主页并提取结构化信息（一步到位，供应用层调用）。
+
+    走统一的抓取零件：先看 robots.txt 是否允许、按域名限速、失败自动重试。
+    抓不到时抛出带中文说明的错误，由界面提示用户改为手动填写。
+    """
+    result = (fetcher or Fetcher()).fetch(url)
+    if not result.ok:
+        raise RuntimeError(result.friendly_error())
+    title = extract_title(result.text)
+    text = html_to_text(result.text)
     return parse_homepage(text, llm, title=title)

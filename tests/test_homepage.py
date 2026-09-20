@@ -76,3 +76,37 @@ def test_fetch_homepage_returns_html():
     client = httpx.Client(transport=httpx.MockTransport(handler))
     html = fetch_homepage("https://example.com/faculty/luwei", client=client)
     assert "陆伟" in html
+
+
+def _fetcher_for(handler, *, robots=True):
+    from advisor_fit.ingest.fetch import Fetcher
+
+    return Fetcher(
+        client=httpx.Client(transport=httpx.MockTransport(handler)),
+        robots_loader=lambda url: robots,
+    )
+
+
+def test_extract_homepage_profile_goes_through_the_fetch_part():
+    """应用层入口必须走统一抓取零件，而不是自己直接请求。"""
+    from advisor_fit.ingest.homepage import extract_homepage_profile
+
+    fetcher = _fetcher_for(lambda request: httpx.Response(200, text=_HTML))
+    profile = extract_homepage_profile(
+        "https://example.com/faculty/luwei", NullLLM(), fetcher=fetcher
+    )
+
+    assert profile.email == "luwei@whu.edu.cn"
+    assert profile.name == "陆伟"
+
+
+def test_extract_homepage_profile_explains_robots_refusal_in_chinese():
+    from advisor_fit.ingest.homepage import extract_homepage_profile
+
+    fetcher = _fetcher_for(lambda request: httpx.Response(200, text=_HTML), robots=False)
+    try:
+        extract_homepage_profile("https://example.com/faculty/luwei", NullLLM(), fetcher=fetcher)
+    except RuntimeError as exc:
+        assert "robots.txt" in str(exc)
+    else:  # pragma: no cover - 明确失败信息比静默通过更重要
+        raise AssertionError("robots 拒绝时应当抛出可读错误")

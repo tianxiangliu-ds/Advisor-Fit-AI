@@ -65,6 +65,18 @@ def extract_name_rule(text: str) -> str | None:
     return None
 
 
+def looks_like_chinese_name(text: str) -> bool:
+    """判断一个短词像不像中文人名：2–4 个汉字，且首字是常见中文姓氏。
+
+    用于从网页链接里筛导师姓名。只靠"2-4 个汉字"会把「学院简介」「师资队伍」
+    「下页」这类导航词也当成名字；加上"首字必须是姓氏"就能滤掉绝大部分误判。
+    """
+    candidate = text.strip()
+    if not _NAME_LINE_RE.match(candidate) or "·" in candidate:
+        return False
+    return candidate[0] in _SURNAMES
+
+
 def extract_pdf_text(path: Path | str) -> ParsedDocument:
     path = Path(path)
     try:

@@ -113,6 +113,15 @@ class RosterRepository:
 
     # -- 查询 -----------------------------------------------------------------
 
+    def clear_official(self) -> int:
+        """清掉官网采集的标记（社区名册保留）；用于重跑爬取前的重置。"""
+        with closing(self._connect()) as conn:
+            row = conn.execute("SELECT COUNT(*) AS n FROM roster WHERE in_official = 1").fetchone()
+            conn.execute("DELETE FROM roster WHERE in_official = 1 AND in_community = 0")
+            conn.execute("UPDATE roster SET in_official = 0, source_url = '', retrieved_at = ''")
+            conn.commit()
+        return int(row["n"])
+
     def count(self) -> int:
         with closing(self._connect()) as conn:
             row = conn.execute("SELECT COUNT(*) AS n FROM roster").fetchone()

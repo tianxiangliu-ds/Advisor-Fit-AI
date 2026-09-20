@@ -81,7 +81,8 @@ _PROFESSOR_STATE_KEYS = (
     "prof_interests", "prof_homepage", "prof_english_name", "prof_search_institution",
     "prof_seed_titles", "_faculty_directions", "_faculty_seed_titles",
     "candidate_papers", "_research_confirm", "_research_steps", "_research_granted",
-    "_research_degraded", "_research_sources", "_research_discipline", "_agent_trace",
+    "_research_degraded", "_research_sources", "_research_discipline", "_research_health",
+    "_agent_trace",
     "field_report", "identity_result", "homepage_profile",
     "result", "identity_confirmed", "paper_read_confirmed", "run_label",
     "manual_paper_count",
@@ -252,6 +253,7 @@ def _run_research(
     )
     st.session_state["_research_degraded"] = trace.degraded_reason
     st.session_state["_research_sources"] = provider.describe()
+    st.session_state["_research_health"] = _research_health(provider)
     st.session_state["_research_discipline"] = provider.discipline_text()
     # 轨迹留在会话里，供「论文核验」页的 Agent 运行轨迹区展示
     st.session_state["_agent_trace"] = trace.to_dict()
@@ -271,6 +273,52 @@ def _run_research(
         st.session_state["_research_steps"] = None
         st.session_state["_research_granted"] = []
         st.session_state.candidate_papers = result.papers
+
+
+def _research_health(provider) -> dict | None:
+    """记录这次检索的"来源健康度"，用来区分"没查成"和"查了但没有"。
+
+    这两件事对用户的意义完全不同：
+    - 所有来源都失败 → 是系统这边的问题，应当重试或换来源，**不能让人以为这位导师没有论文**；
+    - 来源正常返回但没有结果 → 多半是姓名/机构对不上，应当换关键词或手动补录。
+
+    只留计数和前几个失败来源的名字，不把整份来源明细塞进会话。
+    """
+    try:
+        outcomes = list(provider.outcome().outcomes)
+    except Exception:  # noqa: BLE001 - 取不到健康度不影响检索结果
+        return None
+    searched = [item for item in outcomes if item.searched]
+    failed = [item for item in outcomes if item.status in ("blocked", "error")]
+    return {
+        "total": len(outcomes),
+        "searched": len(searched),
+        "failed": len(failed),
+        "failed_labels": [item.label for item in failed][:3],
+    }
+
+
+def _render_empty_result_guidance() -> None:
+    """检索回来 0 篇时的说明。
+
+    CLAUDE.md 要求"既不得报错中断，也不得静默返回空结果"。空着一片什么都不说，
+    用户会以为工具坏了、或者以为这位导师没有论文——两者都是误导。
+    """
+    health = st.session_state.get("_research_health") or {}
+    if health and health.get("searched", 0) == 0:
+        labels = "、".join(health.get("failed_labels") or []) or "全部来源"
+        st.warning(
+            f"这次**一个来源都没查成**（{labels} 未返回）。"
+            "这不代表这位导师没有论文——是检索侧出了问题。"
+            "可以先「重试一次」；多次失败时检查网络，或直接手动补录几篇代表作继续。"
+        )
+        return
+    st.info(
+        "这些来源都正常返回了，但没有找到匹配的论文。"
+        "常见原因是姓名或机构对不上：试试在下面填「导师英文名」、"
+        "把「检索用机构」换成他以前的单位，或者直接填几篇代表论文标题按标题查。"
+        "也可以手动补录，报告与邮件不依赖自动检索。"
+    )
 
 
 def _render_agent_trace(trace: dict | None) -> None:
@@ -1519,6 +1567,8 @@ if active_page == "papers":
 
     papers = st.session_state.candidate_papers
     paper_values: list[dict] = []
+    if not papers and st.session_state.get("_research_sources"):
+        _render_empty_result_guidance()
     if papers:
         normal = [
             i for i, paper in enumerate(papers)

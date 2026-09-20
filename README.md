@@ -235,6 +235,7 @@ uv sync --group crawl
 .\.venv\Scripts\python.exe -m pytest -q
 .\.venv\Scripts\python.exe -m ruff check src tests scripts app.py
 .\.venv\Scripts\python.exe scripts\run_evals.py
+.\.venv\Scripts\python.exe scripts\check_version.py
 # 消歧评测（需 LLM_API_KEY；--rule 可跑机构规则基线对比）
 .\.venv\Scripts\python.exe scripts\run_disambiguation_evals.py
 ```
@@ -267,6 +268,51 @@ uv sync --group crawl
 - “删除本次数据”会删除数据库记录和对应上传 PDF。
 - API Key 只从 `.env` 或环境变量读取。
 - 报告不会自动发送；邮件必须由用户人工确认。
+
+### 上传简历的清理规则
+
+上传的简历一律命名为 `{研究记录ID}.pdf`，所以"还有没有人用"可以精确判断：
+
+| 文件 | 处理 |
+|---|---|
+| 有对应研究记录的简历 | **保留**（删数据时由删除流程一并删除） |
+| 已无对应记录的简历（孤儿） | 超过 **30 天** 自动清理；也可以随时手动立即清理 |
+| 不是 `{UUID}.pdf` 命名的文件 | **系统不碰**（你自己放进来的文件不替你删） |
+
+在「Ⅰ 学生事实」页的「🧹 本机简历文件」里能看到占用了多少、有几份没人用、一键清理。
+
+### 备份与恢复
+
+```powershell
+# 默认：只备份运行数据（研究记录 + 网页缓存），体积很小
+.\.venv\Scripts\python.exe scripts\backup_data.py
+
+# 连大库一起备份（advisors/faculty/supervisor_roster，上百 MB）
+.\.venv\Scripts\python.exe scripts\backup_data.py --all
+```
+
+也可以在「Ⅵ 研究档案」页点「💾 下载数据备份（.zip）」直接下载当前运行数据。
+
+**备份包默认不含**：`.env`（含 API Key）、`uploads/`（含真实简历）、三个大库
+（可用采集脚本重建）。它们都必须用显式参数才会被包含，避免敏感文件被随手拷走。
+包内附 `MANIFEST.md` 写清包含/排除了什么、怎么恢复。
+
+## 版本与更新
+
+- 界面左上角显示当前版本（如 `ADVISOR FIT STUDIO · v0.2.0`）；
+- 版本号同时写在 `pyproject.toml` 与 `src/advisor_fit/__init__.py`，
+  用 `scripts\check_version.py` 检查是否一致（CI 里也会跑）；
+- 改动记录见 `CHANGELOG.md`；
+- **更新方式**（源码使用）：
+
+```powershell
+git pull                # 拉取新版本
+uv sync                 # 依赖有变化时同步
+# 重启应用即可；数据都在 data/ 与本机 .env 里，不会被覆盖
+```
+
+> 更新前建议先跑一次 `scripts\backup_data.py`。
+
 
 ## 证据语义
 

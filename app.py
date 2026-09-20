@@ -13,6 +13,7 @@ from pathlib import Path
 import streamlit as st
 from pydantic import ValidationError
 
+from advisor_fit import __version__
 from advisor_fit.agents.research import research_professor
 from advisor_fit.analysis.direction_search import (
     completeness_text,
@@ -45,9 +46,20 @@ from advisor_fit.manual_pipeline import run_manual_pipeline
 from advisor_fit.providers.disciplines import DISCIPLINE_LABELS
 from advisor_fit.providers.router import SearchRouter
 from advisor_fit.storage.advisor_repo import AdvisorRepository
+from advisor_fit.storage.backup import (
+    build_backup_bytes,
+    collect_entries,
+    default_backup_name,
+    manifest_text,
+)
 from advisor_fit.storage.cache import PageCache
 from advisor_fit.storage.repository import Repository
 from advisor_fit.storage.roster_repo import RosterRepository
+from advisor_fit.storage.uploads import (
+    DEFAULT_RETENTION_DAYS,
+    cleanup_orphans,
+    scan_uploads,
+)
 from advisor_fit.ui_state import forget_widgets, remember_widgets, restore_widgets
 from advisor_fit.ui_theme import CSS
 
@@ -254,6 +266,36 @@ def _run_research(
         st.session_state["_research_steps"] = None
         st.session_state["_research_granted"] = []
         st.session_state.candidate_papers = result.papers
+
+
+def _known_run_ids() -> list[str]:
+    """所有研究记录的 id：上传的简历按 `{run_id}.pdf` 命名，靠它判断哪些文件还有用。"""
+    repo = st.session_state.get("repo")
+    if repo is None:
+        return []
+    try:
+        return [run["id"] for run in repo.list_runs()]
+    except Exception:  # noqa: BLE001 - 账本读不出来时按"全部是孤儿"处理太危险，返回空
+        return []
+
+
+def _uploads_report():
+    return scan_uploads(settings.uploads_dir, _known_run_ids())
+
+
+def _auto_clean_uploads() -> None:
+    """启动时按保留期清理一次孤儿简历（每个会话只做一次，失败不影响使用）。"""
+    if st.session_state.get("_uploads_cleaned"):
+        return
+    st.session_state["_uploads_cleaned"] = True
+    try:
+        cleanup_orphans(
+            settings.uploads_dir,
+            _known_run_ids(),
+            older_than_days=DEFAULT_RETENTION_DAYS,
+        )
+    except Exception:  # noqa: BLE001 - 清理失败绝不能挡住页面
+        pass
 
 
 def _faculty_repo():
@@ -691,10 +733,12 @@ if "repo" not in st.session_state:
 remember_widgets(st.session_state, _PERSISTED_WIDGETS)
 restore_widgets(st.session_state, _PERSISTED_WIDGETS)
 st.session_state.setdefault("active_page", "home")
+_auto_clean_uploads()
 
 with st.sidebar:
     st.markdown('<div class="studio-brand"><span class="brand-mark">◎</span>择研'
-                '<small>ADVISOR FIT STUDIO</small></div>', unsafe_allow_html=True)
+                f'<small>ADVISOR FIT STUDIO · v{__version__}</small></div>',
+                unsafe_allow_html=True)
     st.markdown('<div class="side-label">WORKSPACE / 工作台</div>', unsafe_allow_html=True)
     pages = (
         ("home", "✦  首屏 / 项目入口"),
@@ -937,6 +981,29 @@ if active_page == "history":
         else:
             st.info("尚无可比较的完整记录。")
     st.divider()
+    st.markdown('<div class="section-note">BACKUP / 备份与恢复</div>',
+                unsafe_allow_html=True)
+    st.caption(
+        "把研究记录打包下载，换电脑或误删时可恢复。"
+        "备份包**不含** API Key（.env）与上传的简历；导师大库可用采集脚本重建。"
+    )
+    try:
+        entries, _, skipped = collect_entries(settings.data_dir.parent)
+        if entries:
+            st.download_button(
+                "💾 下载数据备份（.zip）",
+                build_backup_bytes(
+                    entries, manifest_text(entries, skipped, version=__version__)
+                ),
+                file_name=default_backup_name(),
+                mime="application/zip",
+            )
+        else:
+            st.caption("暂无可备份的数据。")
+    except Exception as exc:  # noqa: BLE001 - 备份失败不该影响页面
+        st.caption(f"备份暂不可用：{exc}")
+
+    st.divider()
     confirm_clear = st.checkbox("我确认清空本次会话的数据与上传简历")
     if st.button("清空全部数据", disabled=not confirm_clear):
         _reset_all()
@@ -1032,6 +1099,24 @@ if active_page == "resume":
         if st.session_state.parsed_text:
             with st.expander("查看 PDF 提取文字"):
                 st.text(st.session_state.parsed_text)
+
+        with st.expander("🧹 本机简历文件（清理规则）"):
+            report = _uploads_report()
+            st.caption(report.describe())
+            st.caption(
+                f"规则：与某条研究记录对应的简历会被保留；已无对应记录的简历在 "
+                f"{DEFAULT_RETENTION_DAYS} 天后自动清理。不是「UUID.pdf」命名的文件不会被系统碰。"
+            )
+            if report.orphan_count:
+                if st.button(f"立即清理这 {report.orphan_count} 份无对应记录的简历"):
+                    removed = cleanup_orphans(
+                        settings.uploads_dir, _known_run_ids(), older_than_days=0
+                    )
+                    freed = report.orphan_bytes / 1024
+                    st.success(f"已清理 {len(removed)} 份简历，释放 {freed:.0f} KB。")
+                    st.rerun()
+            else:
+                st.caption("目前没有需要清理的文件。")
 
 
     with resume_right:

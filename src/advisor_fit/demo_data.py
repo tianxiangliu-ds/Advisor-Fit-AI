@@ -138,6 +138,70 @@ def seed_advisors(data_dir: Path | str) -> int:
     return repo.count()
 
 
+def demo_agent_trace(professor_name: str = "示例导师") -> dict:
+    """一份**示例** Agent 运行轨迹（虚构）。
+
+    为什么演示数据必须带轨迹：轨迹区是"Agent 可见"的核心展示，但它只在真正跑过
+    一次检索后才产生。演示数据如果不带，公开 Demo 的访问者就完全看不到 Agent
+    做过什么——而这恰恰是这个项目最该被看到的部分。
+
+    这里手写的步骤对应一次典型运行：模型先查作者 → 核对机构 → 按标题补查 →
+    发现机构冲突请求人工确认 → 结束。**不是真实运行日志**，只是形状一致的示例。
+    """
+    return {
+        "task": f"检索导师「{professor_name}」的候选论文（示例轨迹，非真实运行）",
+        "tools": [
+            {"name": "search_by_author", "description": "按姓名+学校在多个学术库中检索候选论文",
+             "parameters": {"type": "object",
+                            "properties": {"name": {"type": "string"},
+                                           "institution": {"type": ["string", "null"]},
+                                           "source": {"type": "string"}}},
+             "permission": "network"},
+            {"name": "search_by_title",
+             "description": "按论文标题检索（多个学术库 + Crossref 兜底），作者名查不到时用它兜底",
+             "parameters": {"type": "object",
+                            "properties": {"title": {"type": "string"}}},
+             "permission": "network"},
+            {"name": "fetch_professor_homepage",
+             "description": "打开导师个人主页，抽取职称/院系/邮箱/公开写出的研究方向",
+             "parameters": {"type": "object",
+                            "properties": {"url": {"type": "string"}}},
+             "permission": "network"},
+            {"name": "check_paper_affiliations",
+             "description": "检查当前候选论文的机构与目标学校是否一致，判断是否疑似同名作者",
+             "parameters": {"type": "object", "properties": {}},
+             "permission": "read"},
+        ],
+        "steps": [
+            {"index": 0, "kind": "llm_decision", "name": "decide", "status": "ok",
+             "duration_ms": 812, "summary": "tool"},
+            {"index": 1, "kind": "tool_call", "name": "search_by_author",
+             "args_digest": "institution=示例大学&name=示例导师&source=auto",
+             "status": "ok", "duration_ms": 1436, "summary": "papers=25"},
+            {"index": 2, "kind": "llm_decision", "name": "decide", "status": "ok",
+             "duration_ms": 690, "summary": "tool"},
+            {"index": 3, "kind": "tool_call", "name": "check_paper_affiliations",
+             "args_digest": "", "status": "ok", "duration_ms": 3, "summary": "total=25"},
+            {"index": 4, "kind": "llm_decision", "name": "decide", "status": "ok",
+             "duration_ms": 704, "summary": "tool"},
+            {"index": 5, "kind": "tool_call", "name": "search_by_title",
+             "args_digest": "title=知识图谱构建方法（示例）",
+             "status": "ok", "duration_ms": 1120, "summary": "papers=3"},
+            {"index": 6, "kind": "confirmation", "name": "requested", "status": "ok",
+             "duration_ms": 0, "summary": "发现 4 篇论文机构不一致，请确认是否保留"},
+            {"index": 7, "kind": "llm_decision", "name": "decide", "status": "ok",
+             "duration_ms": 704, "summary": "done"},
+            {"index": 8, "kind": "done", "name": "done", "status": "ok",
+             "duration_ms": 0, "summary": "已汇总候选论文，等待人工确认归属"},
+        ],
+        "budget": {"steps": 9, "llm_calls": 4, "tokens": 8120, "tokens_in": 6400,
+                   "tokens_out": 1720, "external_calls": 2,
+                   "per_source": {"search_by_author": 1, "search_by_title": 1},
+                   "elapsed_seconds": 12.4},
+        "degraded_reason": "",
+    }
+
+
 def seed_runs(data_dir: Path | str) -> list[str]:
     """跑两次「人工证据输入」全流程，生成已完成的研究记录（离线、不调用任何 API）。"""
     from advisor_fit.ingest.manual_professor import ManualPaperInput, ManualProfessorInput
@@ -187,6 +251,9 @@ def seed_runs(data_dir: Path | str) -> list[str]:
             paper_read_confirmed=False,
         )
         repo.set_run_name(result.run_id, f"{professor.name} · {professor.institution}")
+        # 每条记录都配一份示例轨迹：公开 Demo 才看得到 Agent 运行轨迹区，
+        # 也让演示不依赖"先点开哪条记录"。
+        repo.save_trace(result.run_id, demo_agent_trace(professor.name))
         run_ids.append(result.run_id)
     return run_ids
 

@@ -99,16 +99,13 @@ def test_history_record_replays_its_agent_trace(tmp_path, monkeypatch):
     轨迹以前只写进数据库、从来没被读回来——刷新一下就没了，回看记录也看不到。
     这条测试盯住"存了要能读回来并显示"。
     """
-    import sys
-
-    sys.path.insert(0, str(Path(__file__).parent.parent / "scripts"))
-    from seed_demo_data import seed_runs  # noqa: PLC0415 - 只在测试里用
+    from advisor_fit.demo_data import ensure_demo_data  # noqa: PLC0415 - 只在测试里用
 
     data_dir = tmp_path / "data"
     data_dir.mkdir(parents=True, exist_ok=True)
     monkeypatch.setattr(settings, "data_dir", data_dir)
     monkeypatch.setattr(settings, "uploads_dir", tmp_path / "uploads")
-    seed_runs(data_dir)
+    ensure_demo_data(data_dir)
 
     app = AppTest.from_file(APP_PATH).run(timeout=20)
     next(button for button in app.button if "研究档案" in button.label).click().run(timeout=20)

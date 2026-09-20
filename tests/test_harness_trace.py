@@ -53,3 +53,43 @@ def test_step_never_stores_raw_full_arguments():
     step = TraceStep(index=0, kind="tool_call", name="t", args_digest="name=王伟")
 
     assert "abstract" not in step.model_dump()
+
+
+def test_run_loop_records_the_tool_surface_offered_to_the_model():
+    """只记"实际调用了什么"不够——还要记"当时有哪些工具可选"。
+
+    否则复盘时无法回答"它为什么没用另一个工具"。
+    """
+    from advisor_fit.harness.loop import run_loop
+    from advisor_fit.harness.tools import ToolRegistry, ToolSpec
+
+    registry = ToolRegistry()
+    registry.register(
+        ToolSpec(
+            name="search_by_author",
+            description="按作者检索",
+            parameters={"type": "object", "properties": {"name": {"type": "string"}}},
+            permission="network",
+        ),
+        lambda **_: {"count": 0},
+    )
+    registry.register(
+        ToolSpec(name="search_by_title", description="按标题检索", permission="network"),
+        lambda **_: {"count": 0},
+    )
+
+    trace = RunTrace(task="t")
+    run_loop(_AlwaysDoneLLM(), task="t", registry=registry, trace=trace, max_steps=1)
+
+    names = [spec["name"] for spec in trace.tools]
+    assert names == ["search_by_author", "search_by_title"]
+    # 参数 schema 也要带上，否则无法解释"模型为什么传错了参数"
+    assert trace.tools[0]["parameters"]["properties"]["name"]["type"] == "string"
+    assert trace.tools[0]["permission"] == "network"
+
+
+class _AlwaysDoneLLM:
+    """只回一个 done 的最小 LLM，用于观察 run_loop 在无工具调用时记录了什么。"""
+
+    def generate(self, *, schema, instructions, payload):
+        return schema(action="done", message="无需检索")

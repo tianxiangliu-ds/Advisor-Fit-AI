@@ -86,9 +86,10 @@
 
 | 语义 | 色值 | 用在哪 |
 |---|---|---|
-| 已完成 | `#54806f` | 流程条 `.done` |
+| 已完成 | `#54806f` | 流程条 `.done`；轨迹步骤成功 `.trace-step .ok` |
 | 进行中 | `#605483` | 流程条 `.current` |
-| 未开始 | `#a2a09b` | 流程条默认 |
+| 未开始 | `#a2a09b` | 流程条默认；轨迹里被跳过的步骤 `.trace-step .skipped` |
+| **出错 / 降级** | `#a8543f` | 轨迹里失败或触发资源上限的步骤 `.trace-step .error`、降级条 `.trace-degraded` 的顶边 |
 | 聚焦轮廓 | `#b9a8de` | 侧栏导航 `:focus-visible`（`outline: 2px`，`outline-offset: 1px`） |
 
 > 语义提示（成功/警告/错误）沿用 Streamlit 原生 `st.success / st.warning / st.error`，只统一圆角为 **5px**，不自定义颜色。
@@ -320,6 +321,34 @@ st.markdown('<p class="page-intro">一句中文说明，告诉用户这一步要
 - 圆角 `4px`（`!important` 覆盖 baseweb）。
 - 聚焦：`border-color: var(--purple)` + `box-shadow: 0 0 0 2px #7569af22`。
 - 复选框 / 单选 / 滑块沿用 Streamlit 主题的 `primaryColor`，不额外定制。
+
+### 4.10 Agent 运行轨迹（`.trace-*`）
+
+用途：把 Harness 的一次运行摊开给用户看——**Agent 调了哪些工具、每步多久、成功还是失败、有没有触发资源上限**。
+这是本项目"Agent 可见"的核心展示区，放在「论文核验」页检索控件下方。
+
+| 元素 | 关键值 |
+|---|---|
+| `.trace-panel` 容器 | 底 `#fffdf9` / `1px solid var(--line)` / 圆角 `6px` / **无阴影** |
+| `.trace-task` 任务行 | `padding:13px 18px` / `border-bottom:1px solid var(--line)` / `.8rem` / 颜色 `#52545b` |
+| `.trace-meta` 概览行 | `display:flex` / `gap:22px` / `padding:14px 18px` / `border-bottom:1px solid var(--line)` |
+| `.trace-meta span` 概览标签 | `.67rem Arial` / `letter-spacing:.14em` / 颜色 `#847f78` |
+| `.trace-meta b` 概览数值 | `1.03rem Georgia` / 字重 400 / 颜色 `#282a33` |
+| `.trace-step` 步骤行 | `display:flex` / `gap:14px` / `padding:12px 18px` / `font-size:.8rem` / 底部 `1px solid var(--line)`（最后一行无） |
+| `.trace-step i` 序号 | `Georgia .95rem` / `font-style:normal` / 颜色 `var(--gold)` / 宽 `22px` |
+| `.trace-step em` 类型标签 | `.61rem Arial` / `letter-spacing:.16em` / `font-style:normal` / 颜色 `#847f78` / 宽 `78px` |
+| `.trace-step b` 步骤名 | 字重 500 / 颜色 `#292b31` |
+| `.trace-step code` 参数摘要 | `.74rem` / 颜色 `#777975` / 背景透明 |
+| `.trace-step span` 耗时 | `margin-left:auto` / `.74rem` / 颜色 `#81817e` |
+| `.trace-step .ok` / `.error` / `.skipped` | `#54806f` / `#a8543f` / `#a2a09b` |
+| `.trace-degraded` 降级条 | `border-top:2px solid #a8543f` + 底 `#f5f0e9` + `padding:12px 18px` + 颜色 `#67635d` |
+
+约束：
+
+- 轨迹里的**参数与结果只显示摘要**（`digest_args` / `_summarise` 已做截断），不得把整篇论文列表写进界面。
+- 概览行最多 5 项：步数 / 工具调用 / 耗时 / token / 外部请求。超出就换行，不缩写数字。
+- 任务行显示这次运行的目标（RunTrace.task），让「调了哪些工具」有上下文。
+- 一次运行的轨迹区块**只在跑过 Agent 之后出现**；没跑过时不显示空面板。
 
 ---
 

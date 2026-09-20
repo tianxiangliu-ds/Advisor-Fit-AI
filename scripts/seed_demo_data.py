@@ -77,6 +77,54 @@ def seed_advisors(data_dir: Path) -> int:
     return repo.count()
 
 
+def demo_agent_trace(professor_name: str = "示例导师") -> dict:
+    """一份**示例** Agent 运行轨迹（虚构，用于让界面上的轨迹区有东西可看）。
+
+    为什么要给演示数据配轨迹：轨迹区是"Agent 可见"的核心展示，但只有真正跑过一次
+    检索才会产生。演示数据如果不带轨迹，别人拿到 Demo 就完全看不到 Agent 做过什么。
+
+    这里手写的步骤对应一次典型运行：模型先查作者 → 再按标题补查 → 发现机构冲突
+    请求人工确认 → 结束。**不是真实运行日志**，只是形状一致的示例。
+    """
+    return {
+        "task": f"检索导师「{professor_name}」的候选论文（示例轨迹，非真实运行）",
+        "tools": [
+            {"name": "search_by_author", "description": "按作者姓名 + 机构检索多个学术库",
+             "parameters": {"type": "object",
+                            "properties": {"name": {"type": "string"},
+                                           "institution": {"type": "string"}}},
+             "permission": "network"},
+            {"name": "search_by_title", "description": "按论文标题检索，作者名查不到时兜底",
+             "parameters": {"type": "object",
+                            "properties": {"title": {"type": "string"}}},
+             "permission": "network"},
+        ],
+        "steps": [
+            {"index": 0, "kind": "llm_decision", "name": "decide", "status": "ok",
+             "duration_ms": 812, "summary": "tool"},
+            {"index": 1, "kind": "tool_call", "name": "search_by_author",
+             "args_digest": "institution=示例大学&name=示例导师&source=auto",
+             "status": "ok", "duration_ms": 1436, "summary": "papers=25"},
+            {"index": 2, "kind": "llm_decision", "name": "decide", "status": "ok",
+             "duration_ms": 690, "summary": "tool"},
+            {"index": 3, "kind": "tool_call", "name": "search_by_title",
+             "args_digest": "title=知识图谱构建方法（示例）",
+             "status": "ok", "duration_ms": 1120, "summary": "papers=3"},
+            {"index": 4, "kind": "confirmation", "name": "requested", "status": "ok",
+             "duration_ms": 0, "summary": "发现 4 篇论文机构不一致，请确认是否保留"},
+            {"index": 5, "kind": "llm_decision", "name": "decide", "status": "ok",
+             "duration_ms": 704, "summary": "done"},
+            {"index": 6, "kind": "done", "name": "done", "status": "ok",
+             "duration_ms": 0, "summary": "已汇总候选论文，等待人工确认归属"},
+        ],
+        "budget": {"steps": 7, "llm_calls": 3, "tokens": 8120, "tokens_in": 6400,
+                   "tokens_out": 1720, "external_calls": 2,
+                   "per_source": {"search_by_author": 1, "search_by_title": 1},
+                   "elapsed_seconds": 12.4},
+        "degraded_reason": "",
+    }
+
+
 def seed_runs(data_dir: Path) -> list[str]:
     """跑两次"人工证据输入"全流程，生成两条已完成记录（离线、不调用任何 API）。"""
     from advisor_fit.ingest.manual_professor import ManualPaperInput, ManualProfessorInput
@@ -163,6 +211,9 @@ def seed_runs(data_dir: Path) -> list[str]:
             paper_read_confirmed=False,
         )
         repo.set_run_name(result.run_id, f"{professor.name} · {professor.institution}")
+        # 每条记录都配一份示例轨迹：回看历史时能看到 Agent 做过什么，
+        # 也让演示不依赖"先点哪条记录"。
+        repo.save_trace(result.run_id, demo_agent_trace(professor.name))
         run_ids.append(result.run_id)
     return run_ids
 

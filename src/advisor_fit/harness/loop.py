@@ -83,6 +83,8 @@ def run_loop(
     if trace is None:
         trace = RunTrace(task=task)
     external_tools = registry.external_tool_names()
+    # 记下这次给了模型哪些工具，便于复盘"它当时有哪些选择、为什么没选另一个"
+    trace.tools = _tool_payload(registry)
 
     steps = list(resume_steps or [])
     granted = set(granted_confirmations or [])

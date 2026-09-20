@@ -46,6 +46,10 @@ class TraceStep(BaseModel):
 
 class RunTrace(BaseModel):
     task: str = ""
+    # 这次运行**提供给模型**的工具清单（名称 / 说明 / 参数 schema / 权限）。
+    # 只记"实际调用了什么"是不够的——看不出 Agent 当时有哪些选择，也就无法复盘
+    # "它为什么没选另一个工具"。
+    tools: list[dict[str, Any]] = Field(default_factory=list)
     steps: list[TraceStep] = Field(default_factory=list)
     budget: dict[str, Any] = Field(default_factory=dict)
     degraded_reason: str = ""

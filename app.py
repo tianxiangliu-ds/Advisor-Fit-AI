@@ -1,11 +1,13 @@
-"""导师双选 AI 助手 v0.1：人工证据输入版 Streamlit 应用。
+"""AdvisorFit AI：Evidence-Grounded 导师匹配 Agent 的 Streamlit 演示前端。
 
-流程：CV 本地解析与人工确认 → 手动导师资料 → 手动录入已核实论文
+流程：CV 本地解析与人工确认 → 导师身份核对 → Agent 检索论文并消歧
 → 可解释匹配 → 事实锁定邮件 → 导出与完整删除。
+Agent 的每一步都记录在 Harness 轨迹里，并在「论文核验」页对外展示。
 """
 
 from __future__ import annotations
 
+import json
 import uuid
 from html import escape
 from pathlib import Path
@@ -13,7 +15,7 @@ from pathlib import Path
 import streamlit as st
 from pydantic import ValidationError
 
-from advisor_fit import __version__
+from advisor_fit import __version__, ui_trace
 from advisor_fit.agents.research import research_professor
 from advisor_fit.analysis.direction_search import (
     completeness_text,
@@ -79,7 +81,8 @@ _PROFESSOR_STATE_KEYS = (
     "prof_interests", "prof_homepage", "prof_english_name", "prof_search_institution",
     "prof_seed_titles", "_faculty_directions", "_faculty_seed_titles",
     "candidate_papers", "_research_confirm", "_research_steps", "_research_granted",
-    "_research_degraded", "field_report", "identity_result", "homepage_profile",
+    "_research_degraded", "_research_sources", "_research_discipline", "_agent_trace",
+    "field_report", "identity_result", "homepage_profile",
     "result", "identity_confirmed", "paper_read_confirmed", "run_label",
     "manual_paper_count",
 )
@@ -250,6 +253,8 @@ def _run_research(
     st.session_state["_research_degraded"] = trace.degraded_reason
     st.session_state["_research_sources"] = provider.describe()
     st.session_state["_research_discipline"] = provider.discipline_text()
+    # 轨迹留在会话里，供「论文核验」页的 Agent 运行轨迹区展示
+    st.session_state["_agent_trace"] = trace.to_dict()
     run_id = st.session_state.get("run_id")
     if run_id:
         try:
@@ -266,6 +271,47 @@ def _run_research(
         st.session_state["_research_steps"] = None
         st.session_state["_research_granted"] = []
         st.session_state.candidate_papers = result.papers
+
+
+def _render_agent_trace(trace: dict | None) -> None:
+    """把 Harness 的一次运行摊开给用户看（HTML 生成见 advisor_fit.ui_trace）。
+
+    为什么要有这一块：Agent 的"自主性"如果不可见，用户只看得到结果，无法判断
+    结论是查出来的还是编出来的。轨迹把"它做了什么"变成可核对的事实——调了哪个
+    工具、每步耗时、成功还是失败、有没有触发资源上限。
+    """
+    if not ui_trace.has_content(trace):
+        return
+
+    st.markdown('<div class="section-note">AGENT TRACE / 本次 Agent 运行轨迹</div>',
+                unsafe_allow_html=True)
+    st.caption("这次运行里 Harness 记下的每一步：模型做了什么决定、调用了哪个工具、结果如何。"
+               "参数与结果只保留摘要。")
+    st.markdown(ui_trace.trace_panel_html(trace), unsafe_allow_html=True)
+
+    if trace.get("degraded_reason"):
+        st.markdown(
+            ui_trace.trace_degraded_html(str(trace["degraded_reason"])),
+            unsafe_allow_html=True,
+        )
+
+    tools = trace.get("tools") or []
+    if tools:
+        with st.expander(f"这次 Agent 手里有哪些工具（{len(tools)} 个）"):
+            for spec in tools:
+                st.markdown(
+                    f"**{escape(str(spec.get('name', '')))}**　"
+                    f"{escape(str(spec.get('description', '')))}"
+                )
+                st.caption(f"权限：{escape(str(spec.get('permission', '')))}")
+
+    st.download_button(
+        "下载本次轨迹（JSON）",
+        data=json.dumps(trace, ensure_ascii=False, indent=2),
+        file_name="agent-trace.json",
+        mime="application/json",
+        help="完整的每一步、工具清单与资源消耗，便于复盘或对外展示。",
+    )
 
 
 def _known_run_ids() -> list[str]:
@@ -941,14 +987,21 @@ if active_page == "history":
         if st.button(label, key=f"hist_{run['id']}"):
             st.session_state.viewed_run = _load_run_view(st.session_state.repo, run["id"])
             st.session_state.show_compare = False
+            # 把当时那次 Agent 运行的轨迹一并读回来，回看时也能看到它做了什么
+            try:
+                st.session_state["_agent_trace"] = st.session_state.repo.load_trace(run["id"])
+            except Exception:  # noqa: BLE001 - 轨迹读不出来不能影响报告回看
+                st.session_state["_agent_trace"] = None
     if st.session_state.get("viewed_run") is not None:
         st.markdown('<div class="section-note">SELECTED RECORD / 所选记录</div>',
                     unsafe_allow_html=True)
         _render_brief(st.session_state.viewed_run)
+        _render_agent_trace(st.session_state.get("_agent_trace"))
         with st.expander("查看该记录的邮件草稿"):
             _render_letter(st.session_state.viewed_run)
         if st.button("关闭历史报告"):
             st.session_state.pop("viewed_run", None)
+            st.session_state["_agent_trace"] = None
             st.rerun()
     if st.button("横向比较已完成记录"):
         st.session_state.show_compare = not st.session_state.get("show_compare", False)
@@ -985,7 +1038,7 @@ if active_page == "history":
         "备份包**不含** API Key（.env）与上传的简历；导师大库可用采集脚本重建。"
     )
     try:
-        # 项目根目录（.env / uploads 相对它）+ 实际数据目录（可能由 DATA_DIR 指定在别处）
+        # 项目根目录（.env / uploads 相对它）+ 实际数据目录（可能是 DATA_DIR 指定的别处）
         entries, _, skipped = collect_entries(
             Path(__file__).resolve().parent, data_dir=settings.data_dir
         )
@@ -1460,6 +1513,9 @@ if active_page == "papers":
                     st.session_state.pop("_research_confirm", None)
                     st.session_state["_research_steps"] = None
                     st.session_state["_research_granted"] = []
+
+    # Agent 运行轨迹：跑过一次检索后才出现（没跑过不显示空面板）
+    _render_agent_trace(st.session_state.get("_agent_trace"))
 
     papers = st.session_state.candidate_papers
     paper_values: list[dict] = []

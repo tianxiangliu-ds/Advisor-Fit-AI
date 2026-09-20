@@ -109,6 +109,31 @@ div[data-testid="stFileUploader"] { background:#fffdf9; border:1px solid var(--l
   padding:15px 18px; display:flex; gap:20px; align-items:center; margin:12px 0 18px; }
 .brief-verdict strong { font:500 1rem "Noto Serif SC",SimSun,serif; color:#36333b; }
 .brief-verdict span { font-size:.81rem; color:#67635d; }
+/* --- Agent 运行轨迹（见 design.md 4.10）--- */
+.trace-panel { background:#fffdf9; border:1px solid var(--line); border-radius:6px;
+  box-shadow:none; overflow:hidden; margin:4px 0 18px; }
+.trace-task { padding:13px 18px; border-bottom:1px solid var(--line);
+  font-size:.8rem; color:#52545b; }
+.trace-meta { display:flex; flex-wrap:wrap; gap:22px; padding:14px 18px;
+  border-bottom:1px solid var(--line); }
+.trace-meta div { display:flex; align-items:baseline; gap:7px; }
+.trace-meta span { font:.67rem Arial,sans-serif; letter-spacing:.14em; color:#847f78; }
+.trace-meta b { font:1.03rem Georgia,serif; font-weight:400; color:#282a33; }
+.trace-step { display:flex; align-items:baseline; gap:14px; padding:12px 18px;
+  font-size:.8rem; border-bottom:1px solid var(--line); }
+.trace-step:last-child { border-bottom:0; }
+.trace-step i { font:400 .95rem Georgia,serif; font-style:normal; color:var(--gold);
+  min-width:22px; }
+.trace-step em { font:.61rem Arial,sans-serif; font-style:normal; letter-spacing:.16em;
+  color:#847f78; min-width:78px; }
+.trace-step b { font-weight:500; color:#292b31; }
+.trace-step code { font-size:.74rem; color:#777975; background:transparent; }
+.trace-step span { margin-left:auto; font-size:.74rem; color:#81817e; white-space:nowrap; }
+.trace-step .ok { color:#54806f; }
+.trace-step .error { color:#a8543f; }
+.trace-step .skipped { color:#a2a09b; }
+.trace-degraded { border-top:2px solid #a8543f; background:#f5f0e9;
+  padding:12px 18px; font-size:.8rem; color:#67635d; }
 @media(max-width:900px) { .block-container { padding:2rem 1.2rem 4rem; }
   .landing-hero .orb { opacity:.25; right:2%; } }
 </style>

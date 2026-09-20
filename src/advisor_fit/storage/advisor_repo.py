@@ -234,6 +234,77 @@ class AdvisorRepository:
             conn.commit()
         return removed
 
+    def normalize_all_names(self, normalize) -> tuple[int, int]:
+        """把全库姓名规范化（剥职称后缀/单位前缀/空格）。
+
+        规范化后若与同校同院的已有条目重名，则**合并**：保留字段更全的那条，
+        把两条的来源并起来，另一条删除。
+
+        返回 (改名数, 合并数)。
+
+        为什么必须先做这一步：清洗时若直接按"姓名里含职称词"删除，
+        「黄军教授」「李杰老师」这些真人会被误删。规范化把它们还原成
+        「黄军」「李杰」，人就保住了。
+        """
+        renamed = merged = 0
+
+        def _richness(row: sqlite3.Row) -> int:
+            fields = ("title", "email", "homepage_url", "profile_text", "orcid", "openalex_id")
+            score = sum(1 for f in fields if (row[f] or "").strip())
+            for f in ("research_directions", "research_areas", "publications"):
+                try:
+                    score += 1 if json.loads(row[f] or "[]") else 0
+                except (ValueError, TypeError):
+                    pass
+            return score
+
+        with closing(self._connect()) as conn:
+            rows = conn.execute("SELECT * FROM advisors").fetchall()
+            for row in rows:
+                old = row["name"]
+                new = normalize(old)
+                if not new or new == old:
+                    continue
+                key = (row["university"], row["department"], new)
+                existing = conn.execute(
+                    "SELECT * FROM advisors WHERE university=? AND department=? AND name=?",
+                    key,
+                ).fetchone()
+                if existing is None:
+                    conn.execute(
+                        "UPDATE advisors SET name=? WHERE university=? AND department=? AND name=?",
+                        (new, row["university"], row["department"], old),
+                    )
+                    renamed += 1
+                    continue
+                keep, drop = (
+                    (existing, row) if _richness(existing) >= _richness(row) else (row, existing)
+                )
+                try:
+                    sources = json.loads(keep["sources"] or "[]")
+                except (ValueError, TypeError):
+                    sources = []
+                for item in json.loads(drop["sources"] or "[]"):
+                    if item not in sources:
+                        sources.append(item)
+                conn.execute(
+                    "UPDATE advisors SET sources=? WHERE university=? AND department=? AND name=?",
+                    (
+                        json.dumps(sources, ensure_ascii=False),
+                        keep["university"],
+                        keep["department"],
+                        keep["name"],
+                    ),
+                )
+                if drop["name"] != keep["name"] or drop["department"] != keep["department"]:
+                    conn.execute(
+                        "DELETE FROM advisors WHERE university=? AND department=? AND name=?",
+                        (drop["university"], drop["department"], drop["name"]),
+                    )
+                merged += 1
+            conn.commit()
+        return renamed, merged
+
     def delete_by_name_rule(self, reject) -> tuple[int, list[tuple[str, str, str]]]:
         """按姓名规则删除条目（不分来源）。
 

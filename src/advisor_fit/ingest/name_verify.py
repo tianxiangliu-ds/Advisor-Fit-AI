@@ -87,11 +87,125 @@ def normalize_name(text: str) -> str:
 
 
 def looks_like_foreign_name(text: str) -> bool:
-    """外籍学者姓名，如「Kok-Meng Lee」「John M. Pfotenhauer」。"""
+    """外籍学者姓名，如「Kok-Meng Lee」「John M. Pfotenhauer」「AndersLindquist」。"""
     candidate = (text or "").strip()
-    if not _LATIN_NAME_RE.match(candidate):
+    if not candidate or not re.search(r"[A-Za-z]{2,}", candidate):
         return False
-    return bool(re.search(r"[A-Za-z]{2,}", candidate)) and " " in candidate or "-" in candidate
+    if not re.fullmatch(r"[A-Za-z][A-Za-z.\-' ]{1,40}", candidate):
+        return False
+    # 全大写短串（CYC、ZYT）多为缩写，不算姓名
+    letters_only = re.sub(r"[^A-Za-z]", "", candidate)
+    if letters_only.isupper() and len(letters_only) <= 4:
+        return False
+    return bool(re.search(r"[a-z]", candidate))
+
+
+# 姓名后面常被粘上的职称。注意：这里**不放「导师」「老师」「博导」「硕导」**——
+# 它们是栏目词而不是职称后缀，放进来会把「全部导师」剥成「全部」从而逃过过滤。
+TITLE_SUFFIXES: tuple[str, ...] = (
+    "特聘副研究员", "助理研究员", "特聘研究员", "副研究员", "助理教授", "特聘教授",
+    "副教授", "研究员", "博士后", "讲师", "教授", "老师",
+)
+# 姓名前面常被粘上的单位/机构
+_INSTITUTION_PREFIX_RE = re.compile(
+    r"^[一-龥A-Za-z]{0,8}?(?:学院|研究院|研究所|中心|学系|工研院|医院|实验室)"
+)
+
+
+_EMAIL_IN_TEXT_RE = re.compile(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}")
+# 卡片文本里用于切出姓名边界的机构词
+_INSTITUTION_MARKERS: tuple[str, ...] = (
+    "大学", "学院", "学系", "研究院", "研究所", "研究中心", "实验室", "医院", "学部",
+)
+# 高校名常见的地名/校名前缀：姓名后面通常紧跟这些词，用它来确认"名字切到哪儿"
+_INSTITUTION_STARTS: tuple[str, ...] = (
+    "武汉", "北京", "清华", "上海", "南京", "浙江", "中国", "华中", "华东", "华南",
+    "西南", "西北", "东北", "天津", "四川", "中山", "复旦", "南开", "同济", "西安",
+    "兰州", "吉林", "山东", "厦门", "湖南", "中南", "哈尔滨", "大连", "重庆", "深圳",
+    "苏州", "郑州", "暨南", "东南", "广州", "成都", "合肥", "长沙", "青岛", "宁波",
+    "大学", "学院", "研究院", "研究所", "学系", "中心", "实验室", "医院", "学部",
+    "附属", "第一", "第二", "第三", "国家",
+)
+
+
+def parse_card_link(text: str) -> dict | None:
+    """解析"整张卡片就是一个链接"的格式。
+
+    很多高校师资页把整个人物卡片包在一个 <a> 里，链接文字是
+    「姓名 + 单位 + 职称 + 邮箱」连成的一长串，例如：
+        龚韵武汉大学空间科学与技术系副主任，教授yun.gong@whu.edu.cn
+        陈燕鸣武汉大学动力与机械学院副教授chenyanming@whu.edu.cn
+        程磊教授Lei.Cheng@whu.edu.cn
+        丁浩武汉大学地球与空间科学技术学院，副院长，教授dhaosgg@sgg.whu.edu.cn
+
+    做法：剥掉邮箱与职称，再"从前往后试姓名长度"——只有当剩余部分
+    确实以地名/校名/机构词开头时，才认定前面的就是姓名。
+    """
+    raw = normalize_name(text)
+    if len(raw) < 2:
+        return None
+
+    email = ""
+    found = _EMAIL_IN_TEXT_RE.search(raw)
+    if found:
+        email = found.group(0)
+        raw = raw.replace(email, "")
+
+    title = ""
+    for word in TITLE_SUFFIXES:
+        if word in raw:
+            title = word
+            raw = raw.replace(word, "")
+            break
+
+    head = ""
+    for length in (3, 2):
+        if len(raw) <= length:
+            continue
+        candidate = raw[:length]
+        rest = raw[length:]
+        if not looks_like_person_name(candidate):
+            continue
+        if any(rest.startswith(prefix) for prefix in _INSTITUTION_STARTS):
+            head = candidate
+            break
+
+    if not head:
+        # 没有单位信息（如「程磊」这种只剩姓名的），整段就是姓名
+        stripped = re.split(r"[，,、。；;：:(（]", raw)[0].strip()
+        if looks_like_person_name(stripped):
+            head = stripped
+        elif looks_like_foreign_name(stripped):
+            head = stripped
+
+    if not head:
+        return None
+    return {"name": head, "title": title, "email": email, "directions": ""}
+
+
+def normalize_person_name(text: str) -> str:
+    """把姓名规整成规范写法。
+
+    「董陇军副教授」→「董陇军」；「工研院胡耀武」→「胡耀武」；「薛 渊」→「薛渊」。
+    规范化的意义：**保住人**，只是把粘在姓名上的职称/单位前缀剥掉，而不是删掉整条记录。
+
+    注意：外籍姓名（如「matthias weidemüller」）**保持原样**，空格是姓名的一部分。
+    """
+    stripped = (text or "").strip()
+    if looks_like_foreign_name(stripped):
+        return re.sub(r"\s+", " ", stripped)
+
+    name = normalize_name(stripped)
+    # 剥掉职称后缀（长词优先，避免「教授」吃掉「副教授」）
+    for suffix in TITLE_SUFFIXES:
+        if name.endswith(suffix) and len(name) - len(suffix) >= 2:
+            name = name[: -len(suffix)]
+            break
+    # 剥掉单位前缀
+    match = _INSTITUTION_PREFIX_RE.match(name)
+    if match and len(name) - match.end() >= 2:
+        name = name[match.end() :]
+    return name.strip()
 
 
 def is_safe_to_auto_delete(text: str) -> bool:
@@ -99,14 +213,33 @@ def is_safe_to_auto_delete(text: str) -> bool:
 
     与 has_ui_word 的区别：这里用的是收紧后的 SAFE_UI_ROOTS，
     避免把「郭新闻」「李文化」「方向忠」这类真名误删。
+    **先做规范化再判断**——「董陇军副教授」规范化成「董陇军」后应当保留。
     """
-    name = normalize_name(text)
+    raw = normalize_name(text)
+    if not raw:
+        return True
+    if looks_like_foreign_name(raw):
+        return False
+    # 先把职称后缀摘掉再看界面词根。
+    # 这样「董陇军副教授」不会被误删（摘掉后是干净的姓名），
+    # 而「计算机学院大部分老师」摘掉"老师"后仍含"学院"，照样会被删。
+    stripped = raw
+    for suffix in TITLE_SUFFIXES:
+        if stripped.endswith(suffix) and len(stripped) - len(suffix) >= 2:
+            stripped = stripped[: -len(suffix)]
+            break
+    for root in SAFE_UI_ROOTS:
+        if root in stripped:
+            return True
+    name = normalize_person_name(raw)
     if not name:
+        return True
+    if not _ALLOWED_NAME_RE.match(name):
         return True
     for root in SAFE_UI_ROOTS:
         if root in name:
             return True
-    return not _ALLOWED_NAME_RE.match(name)
+    return False
 
 # 大模型复核用的提示词（也登记在 llm/prompts.py 里，便于版本管理）
 VERIFY_INSTRUCTIONS = (
@@ -222,28 +355,39 @@ CLEAN_INSTRUCTIONS = (
 
 
 def classify_names_with_llm(
-    llm, names: list[str], *, batch_size: int = 120
+    llm, names: list[str], *, batch_size: int = 120, retries: int = 2
 ) -> set[str] | None:
-    """批量判定哪些是真名。返回 keep 集合；模型不可用时返回 None（调用方自行兜底）。"""
+    """批量判定哪些是真名。返回 keep 集合；完全不可用时返回 None（调用方自行兜底）。
+
+    单批失败不会中断整轮（网络抖动很常见），只有一批都没成功才返回 None。
+    """
     if not names:
         return set()
     if not is_llm_available(llm):
         return None
     schema = build_verify_schema()
     keep: set[str] = set()
+    succeeded = 0
+    attempted = 0
     for start in range(0, len(names), batch_size):
         batch = names[start : start + batch_size]
-        try:
-            output = llm.generate(
-                schema=schema,
-                instructions=CLEAN_INSTRUCTIONS,
-                payload={"candidates": batch},
-            )
-        except LLMUnavailable:
-            return None
-        except Exception:  # noqa: BLE001 - 单批失败就跳过这一批
-            continue
-        items = getattr(output, "keep", None)
-        if isinstance(items, list):
-            keep.update(str(item).strip() for item in items if str(item).strip())
+        attempted += 1
+        for attempt in range(retries + 1):
+            try:
+                output = llm.generate(
+                    schema=schema,
+                    instructions=CLEAN_INSTRUCTIONS,
+                    payload={"candidates": batch},
+                )
+            except Exception:  # noqa: BLE001 - 单批失败重试，仍失败就跳过这一批
+                if attempt == retries:
+                    break
+                continue
+            items = getattr(output, "keep", None)
+            if isinstance(items, list):
+                keep.update(str(item).strip() for item in items if str(item).strip())
+                succeeded += 1
+            break
+    if attempted and succeeded == 0:
+        return None
     return keep

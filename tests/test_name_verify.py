@@ -102,3 +102,120 @@ def test_llm_verify_ignores_unknown_names_from_the_model():
     llm = _FakeVerifyLLM(["陆伟", "模型编的名字"])
 
     assert verify_with_llm(llm, ["陆伟", "安璐"]) == ["陆伟"]
+
+
+# -- 卡片式链接（整张人物卡片是一个 <a>）--------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("text", "name", "title", "email"),
+    [
+        (
+            "龚韵武汉大学空间科学与技术系副主任，教授yun.gong@whu.edu.cn",
+            "龚韵", "教授", "yun.gong@whu.edu.cn",
+        ),
+        (
+            "陈燕鸣武汉大学动力与机械学院副教授chenyanming@whu.edu.cn",
+            "陈燕鸣", "副教授", "chenyanming@whu.edu.cn",
+        ),
+        ("程磊教授Lei.Cheng@whu.edu.cn", "程磊", "教授", "Lei.Cheng@whu.edu.cn"),
+        ("付松教授fusion@whu.edu.cn", "付松", "教授", "fusion@whu.edu.cn"),
+    ],
+)
+def test_parse_card_link_extracts_name_title_email(text, name, title, email):
+    from advisor_fit.ingest.name_verify import parse_card_link
+
+    parsed = parse_card_link(text)
+
+    assert parsed is not None
+    assert parsed["name"] == name
+    assert parsed["title"] == title
+    assert parsed["email"] == email
+
+
+def test_parse_card_link_handles_department_note_before_title():
+    from advisor_fit.ingest.name_verify import parse_card_link
+
+    parsed = parse_card_link(
+        "丁浩武汉大学地球与空间科学技术学院，副院长，教授dhaosgg@sgg.whu.edu.cn"
+    )
+
+    assert parsed is not None
+    assert parsed["name"] == "丁浩"
+    assert parsed["email"] == "dhaosgg@sgg.whu.edu.cn"
+
+
+def test_parse_card_link_keeps_foreign_names():
+    from advisor_fit.ingest.name_verify import parse_card_link
+
+    parsed = parse_card_link("GhamgeenIzatRashed(阿部)副教授ghamgeen@whu.edu.cn")
+
+    assert parsed is not None
+    assert parsed["name"] == "GhamgeenIzatRashed"
+    assert parsed["email"] == "ghamgeen@whu.edu.cn"
+
+
+def test_parse_card_link_ignores_navigation_cards():
+    from advisor_fit.ingest.name_verify import parse_card_link
+
+    assert parse_card_link("学生就业指导与服务中心") is None
+
+
+# -- 规范化（保人，不删人）----------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("raw", "normalized"),
+    [
+        ("董陇军副教授", "董陇军"),
+        ("刘志祥教授", "刘志祥"),
+        ("工研院胡耀武", "胡耀武"),
+        ("薛 渊", "薛渊"),
+        ("陆伟", "陆伟"),
+    ],
+)
+def test_normalize_person_name_keeps_the_person(raw, normalized):
+    from advisor_fit.ingest.name_verify import normalize_person_name
+
+    assert normalize_person_name(raw) == normalized
+
+
+@pytest.mark.parametrize("raw", ["董陇军副教授", "刘志祥教授", "工研院胡耀武"])
+def test_names_with_title_or_prefix_are_not_auto_deleted(raw):
+    """带职称/单位前缀的不是垃圾，规范化后要保住人，不能删。"""
+    from advisor_fit.ingest.name_verify import is_safe_to_auto_delete
+
+    assert is_safe_to_auto_delete(raw) is False
+
+
+@pytest.mark.parametrize(
+    "raw",
+    ["郭新闻", "李文化", "方向忠", "闫永达", "玄玉波", "Kok-MengLee", "AndersLindquist",
+     "龚韵", "陈燕鸣"],
+)
+def test_real_names_and_rare_surnames_are_not_auto_deleted(raw):
+    """含「新闻/文化/方向」字样或罕见姓氏、外籍姓名的，都是真人，绝不能自动删。"""
+    from advisor_fit.ingest.name_verify import is_safe_to_auto_delete
+
+    assert is_safe_to_auto_delete(raw) is False
+
+
+@pytest.mark.parametrize(
+    "raw",
+    ["全部导师", "电信学院大部分导师", "计算机学院大部分老师", "某院放疗科",
+     "CYC", "ZYT", "邓 * ling"],
+)
+def test_column_names_and_junk_are_safe_to_auto_delete(raw):
+    from advisor_fit.ingest.name_verify import is_safe_to_auto_delete
+
+    assert is_safe_to_auto_delete(raw) is True
+
+
+@pytest.mark.parametrize(
+    "raw",
+    ["师生服务", "常用下载", "师资队伍", "现任领导", "学院简介", "宣传片", "高端培训", "全职教师"],
+)
+def test_ui_words_are_safe_to_auto_delete(raw):
+    from advisor_fit.ingest.name_verify import is_safe_to_auto_delete
+
+    assert is_safe_to_auto_delete(raw) is True

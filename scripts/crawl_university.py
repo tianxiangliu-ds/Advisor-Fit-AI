@@ -42,7 +42,10 @@ from advisor_fit.ingest.faculty import (  # noqa: E402
 )
 from advisor_fit.ingest.homepage import html_to_text  # noqa: E402
 from advisor_fit.ingest.name_verify import (  # noqa: E402
+    has_common_surname,
+    looks_like_foreign_name,
     looks_like_person_name,
+    parse_card_link,
     verify_with_llm,
 )
 from advisor_fit.ingest.supervisor_roster import split_note  # noqa: E402
@@ -394,11 +397,23 @@ def extract_entries(html: str, base_url: str) -> list[dict]:
 
     for link in extract_links(html, base_url):
         text = re.sub(r"\s+", "", link["text"])
-        if text in NAME_STOPWORDS or not looks_like_person_name(text):
+        if text in NAME_STOPWORDS:
             continue
-        item = _entry(text)
-        if not item["homepage_url"]:
-            item["homepage_url"] = link["href"]
+        if looks_like_person_name(text):
+            item = _entry(text)
+            if not item["homepage_url"]:
+                item["homepage_url"] = link["href"]
+            continue
+        # 卡片式链接：整张人物卡片是一个 <a>，链接文字是「姓名+单位+职称+邮箱」的长串
+        card = parse_card_link(text)
+        if card and card.get("name"):
+            item = _entry(card["name"])
+            if card.get("title") and not item["title"]:
+                item["title"] = card["title"]
+            if card.get("email") and not item["email"]:
+                item["email"] = card["email"]
+            if not item["homepage_url"]:
+                item["homepage_url"] = link["href"]
 
     for row in extract_table_rows(html):
         name = ""
@@ -473,6 +488,88 @@ def extract_detail_fields(html: str, name: str = "") -> dict:
     return fields
 
 
+# 师资分类页常见的链接文本：出现这些词的链接，很可能指向下一层名单
+SUBPAGE_KEYS = (
+    "系", "所", "中心", "教研室", "教师", "人员", "队伍", "系列", "教授", "副教授",
+    "讲师", "博导", "硕导", "师资", "名录", "国内", "国外", "全部", "全体", "专任",
+    "在职", "教师名录", "导师", "团队",
+)
+
+
+def _sub_page_candidates(html: str, url: str, limit: int = 25) -> list[dict]:
+    """挑出"可能是下一层名单页"的链接。
+
+    注意：**不限制在前 N 个链接里找**。像杜伦联合学院的「国内师资 / 国外师资」
+    排在整页第 30 个链接之后，之前截断在前 30 个，导致直接漏掉。
+    """
+    picked: list[dict] = []
+    seen: set[str] = set()
+    normalized_url = url.rstrip("/")
+    for link in extract_links(html, url):
+        href = (link["href"] or "").strip()
+        if not href or href.rstrip("/") == normalized_url or href in seen:
+            continue
+        seen.add(href)
+        text = re.sub(r"\s+", "", link["text"])
+        if not text or not any(key in text for key in SUBPAGE_KEYS):
+            continue
+        picked.append({"text": text, "href": href})
+    return picked[:limit]
+
+
+def _collect_entries(
+    url: str,
+    *,
+    client=None,
+    delay: float,
+    timeout: float = 20.0,
+    depth: int = 1,
+    visited: set[str] | None = None,
+    max_depth: int = 3,
+    enough: int = 25,
+) -> list[dict]:
+    """递归收集姓名：逐层比较，取人最多的那一支。
+
+    为什么要"够多也继续看"：很多学院的师资页本身有十几个链接，但它们是
+    「历史名家 / 学术研究 / 海外学习」这类栏目，看着像人名、其实是界面词。
+    如果只看数量就停在这里，真正装名单的「专任教师」子页（可能有上百人）就会被漏掉。
+    所以只有在数量足够多（>= enough）或没有下级候选时才停。
+    """
+    visited = visited if visited is not None else set()
+    if depth > max_depth or url in visited:
+        return []
+    visited.add(url)
+    try:
+        time.sleep(delay)
+        html = _fetch_with_fallback(url, client=client, timeout=timeout)
+    except Exception:  # noqa: BLE001 - 单页失败不影响其它分支
+        return []
+
+    entries = extract_entries(html, url)
+    if depth >= max_depth or len(entries) >= enough:
+        return entries
+
+    candidates = _sub_page_candidates(html, url)
+    if not candidates:
+        return entries
+
+    best = entries
+    for link in candidates[:15]:
+        sub = _collect_entries(
+            link["href"],
+            client=client,
+            delay=delay,
+            timeout=timeout,
+            depth=depth + 1,
+            visited=visited,
+            max_depth=max_depth,
+            enough=enough,
+        )
+        if len(sub) > len(best):
+            best = sub
+    return best
+
+
 def enrich_with_details(
     entries: list[dict],
     *,
@@ -502,6 +599,34 @@ def enrich_with_details(
     return filled
 
 
+def _finalize_entries(entries: list[dict], html: str, result: CollegeResult) -> list[dict]:
+    """对候选做规则之外的复核（大模型），返回清理后的结果。
+
+    注意一个坑：模型调用失败时 verify_with_llm 会"原样返回"，如果不管，
+    错误数据就会被整批放行（实测口腔医学院的 35 个医院导航词就是这样进来的）。
+    所以这里加了一道判断：一整批原样返回且数量较多时，视为调用失败，
+    退回"必须有常见姓氏或是外籍姓名"的更严规则。
+    """
+    if not entries or _LLM is None:
+        return entries
+    names = [item["name"] for item in entries]
+    keep = verify_with_llm(_LLM, names, html_to_text(html))
+    if keep == names and len(names) >= 10:
+        keep = [
+            name
+            for name in names
+            if has_common_surname(name) or looks_like_foreign_name(name)
+        ]
+        note = "AI 复核未生效，已退回姓氏过滤"
+        result.note = f"{result.note}；{note}".strip("；")
+    before = len(entries)
+    kept = [item for item in entries if item["name"] in set(keep)]
+    if len(kept) != before and "AI 复核" not in result.note:
+        note = f"AI 复核剔除 {before - len(kept)} 个非人名"
+        result.note = f"{result.note}；{note}".strip("；")
+    return kept
+
+
 def crawl_college(
     college: str,
     url: str,
@@ -529,61 +654,42 @@ def crawl_college(
         result.note = f"抓师资页失败：{type(exc).__name__}"
         return result
 
-    entries = extract_entries(html, list_url)
+    entries = _finalize_entries(extract_entries(html, list_url), html, result)
     if len(entries) < 3:
         # 静态抓到的姓名太少：这一页很可能是 JS 渲染出来的，强制重抓一次
         try:
             time.sleep(delay)
             rendered = _fetch(list_url, client=client, timeout=timeout, js=True)
-            rendered_entries = extract_entries(rendered, list_url)
+            rendered_entries = _finalize_entries(
+                extract_entries(rendered, list_url), rendered, result
+            )
             if len(rendered_entries) > len(entries):
                 entries = rendered_entries
                 html = rendered
-                result.note = "经浏览器渲染取得"
+                result.note = f"{result.note}；经浏览器渲染取得".strip("；")
         except Exception:  # noqa: BLE001 - 渲染失败就用静态结果
             pass
 
+    # 还是太少就递归下钻：师资页常见「专任教师/国内师资/国外师资/各系所」等分类入口，
+    # 真正的名单在下一层甚至下两层。**必须在过滤之后再判断**——很多分类页本身
+    # 有几十个界面词链接，过滤前看着"够多"，过滤后其实一个真人都没有。
     if len(entries) < 3:
-        # 再试一层：很多学院的师资页只列「专任教师 / 实验人员 / 管理人员」等分类入口，
-        # 真正的姓名在分类页里，需要顺着这些入口再往下走一层。
-        best: list[dict] = []
-        for link in extract_links(html, list_url)[:30]:
-            text = re.sub(r"\s+", "", link["text"])
-            if not any(
-                key in text
-                for key in (
-                    "系", "所", "中心", "教研室", "教师", "人员", "队伍", "系列",
-                    "教授", "副教授", "讲师", "博导", "硕导", "师资", "名录",
-                )
-            ):
-                continue
-            try:
-                time.sleep(delay)
-                sub_html = _fetch_with_fallback(link["href"], client=client, timeout=timeout)
-            except Exception:  # noqa: BLE001
-                continue
-            sub_entries = extract_entries(sub_html, link["href"])
-            if len(sub_entries) > len(best):
-                best = sub_entries
-            if len(best) >= 10:
-                break
-        if len(best) > len(entries):
-            entries = best
-            result.note = "经二级页取得"
+        drilled = _collect_entries(
+            list_url,
+            client=client,
+            delay=delay,
+            timeout=timeout,
+            depth=1,
+            visited=set(),  # _collect_entries 自己会把入口加入 visited
+            max_depth=3,
+        )
+        verified = _finalize_entries(drilled, html, result) if drilled else []
+        if len(verified) > len(entries):
+            entries = verified
+            result.note = f"{result.note}；经多层分类页下钻取得".strip("；")
 
     result.entries = entries
     result.names = [item["name"] for item in entries]
-
-    # 大模型复核（配置了 LLM_API_KEY 才生效；没配置就跳过，不做任何删减）
-    if entries and _LLM is not None:
-        keep = set(verify_with_llm(_LLM, [item["name"] for item in entries], html_to_text(html)))
-        before = len(entries)
-        entries = [item for item in entries if item["name"] in keep]
-        result.entries = entries
-        result.names = [item["name"] for item in entries]
-        if len(entries) != before:
-            removed = before - len(entries)
-            result.note = (result.note + f"；AI 复核剔除 {removed} 个非人名").strip("；")
 
     if entries and details_per_college > 0:
         got = enrich_with_details(

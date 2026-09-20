@@ -1137,7 +1137,7 @@ def main() -> int:
     client = build_client()
     _FETCHER = Fetcher(
         client=client, user_agent=client.headers["User-Agent"],
-        min_interval_seconds=max(args.delay, 1.5),
+        min_interval_seconds=max(args.delay, 0.8),
     )
     try:
         for university, home in targets:

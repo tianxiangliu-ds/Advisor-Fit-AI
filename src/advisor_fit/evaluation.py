@@ -236,6 +236,69 @@ def eval_matching() -> list[Metric]:
     ]
 
 
+def eval_advisor_library(root: Path) -> tuple[list[Metric], list[dict[str, str]]]:
+    """导师库的数据质量：界面词残留与真人存活。
+
+    这两条都是**事故驱动**的指标，不是凑数的：
+    - `ui_word_residue`：库里不该存在"师资队伍""校园风光"这类界面词。它们混进来
+      说明采集或清洗漏了；
+    - `must_survive_missing`：`MUST_SURVIVE_NAMES` 里的真人一个都不能少。
+      2026-09 的清洗事故删掉了 13 条真人（含清华教授张学工），当时**没有任何
+      自动检查能发现**——只有人工逐条复核才看出来。这两条指标就是为了让那种事
+      下次自己冒出来。
+
+    没有库文件时（新克隆、演示数据尚未生成）跳过并说明，不算失败。
+    """
+    db = root / "data" / "advisors.db"
+    if not db.exists():
+        return [], [{"key": "library", "reason": "还没有导师库（data/advisors.db），跳过"}]
+
+    import sqlite3
+
+    from advisor_fit.ingest.name_verify import MUST_SURVIVE_NAMES, is_safe_to_auto_delete
+
+    try:
+        conn = sqlite3.connect(f"file:{db}?mode=ro", uri=True)
+    except sqlite3.Error as exc:
+        return [], [{"key": "library", "reason": f"打不开导师库：{exc}"}]
+    try:
+        rows = list(conn.execute("SELECT name, title, email, research_directions FROM advisors"))
+    except sqlite3.Error as exc:
+        return [], [{"key": "library", "reason": f"读不了导师库：{exc}"}]
+    finally:
+        conn.close()
+
+    total = len(rows)
+    if not total:
+        return [Metric("library.advisors", "导师库条目", 0.0, "count", True, None)], []
+
+    ui_residue = sum(1 for name, *_ in rows if is_safe_to_auto_delete(name or ""))
+    present = {name for name, *_ in rows}
+    missing = [name for name in MUST_SURVIVE_NAMES if name not in present]
+
+    filled = 0
+    for _, title, email, directions in rows:
+        # 库里空列表存成字符串 '[]'，而 '[]' 在 Python 里是真值——
+        # 不显式判空的话这个指标会永远显示 100%，等于没测。
+        if any(str(value or "").strip() not in ("", "[]", "{}", "null") for value in
+               (title, email, directions)):
+            filled += 1
+
+    return [
+        Metric("library.advisors", "导师库条目", float(total), "count", True, None,
+               "数字只作记录，不设门线（取决于采集进度）"),
+        Metric("library.ui_word_residue", "导师库界面词残留", float(ui_residue),
+               "count", False, 0.0,
+               "库里不该出现「师资队伍」这类界面词；出现说明采集或清洗漏了"),
+        Metric("library.must_survive_missing", "被误删的真人", float(len(missing)),
+               "count", False, 0.0,
+               ("全部在库" if not missing else "缺失：" + "、".join(missing))),
+        Metric("library.field_fill_rate", "导师库字段有值率",
+               filled / total, "%", True, None,
+               "职称/邮箱/研究方向至少有一项的比例（观察值，取决于采集覆盖）"),
+    ], []
+
+
 def eval_prompts() -> list[Metric]:
     """LLM 输出可靠性（离线代理指标）：提示词必须登记且非空、带版本。"""
     total = len(_REGISTRY)
@@ -261,6 +324,9 @@ def run_all(root: Path, *, llm=None, include_llm: bool = False) -> EvalReport:
     report.metrics.extend(eval_claims(root))
     report.metrics.extend(eval_matching())
     report.metrics.extend(eval_prompts())
+    library_metrics, library_skipped = eval_advisor_library(root)
+    report.metrics.extend(library_metrics)
+    report.skipped.extend(library_skipped)
 
     if include_llm and llm is not None and not isinstance(llm, NullLLM):
         llm_metrics = eval_disambiguation(root, llm=llm)

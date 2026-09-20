@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-09-20 23:30:53",
+  "generated_at": "2026-09-20 23:50:10",
   "metrics": [
     {
       "key": "disambig.precision",
@@ -89,6 +89,46 @@
       "higher_is_better": true,
       "gate": 1.0,
       "detail": "10/10 条非空且带版本号",
+      "passed": true
+    },
+    {
+      "key": "library.advisors",
+      "label": "导师库条目",
+      "value": 30116.0,
+      "unit": "count",
+      "higher_is_better": true,
+      "gate": null,
+      "detail": "数字只作记录，不设门线（取决于采集进度）",
+      "passed": true
+    },
+    {
+      "key": "library.ui_word_residue",
+      "label": "导师库界面词残留",
+      "value": 0.0,
+      "unit": "count",
+      "higher_is_better": false,
+      "gate": 0.0,
+      "detail": "库里不该出现「师资队伍」这类界面词；出现说明采集或清洗漏了",
+      "passed": true
+    },
+    {
+      "key": "library.must_survive_missing",
+      "label": "被误删的真人",
+      "value": 0.0,
+      "unit": "count",
+      "higher_is_better": false,
+      "gate": 0.0,
+      "detail": "全部在库",
+      "passed": true
+    },
+    {
+      "key": "library.field_fill_rate",
+      "label": "导师库字段有值率",
+      "value": 0.2632155664762917,
+      "unit": "%",
+      "higher_is_better": true,
+      "gate": null,
+      "detail": "职称/邮箱/研究方向至少有一项的比例（观察值，取决于采集覆盖）",
       "passed": true
     }
   ],

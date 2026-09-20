@@ -10,10 +10,13 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
 from advisor_fit.evaluation import (
     EvalReport,
     Metric,
     compare_to_baseline,
+    eval_advisor_library,
     eval_claims,
     eval_disambiguation,
     eval_matching,
@@ -173,3 +176,82 @@ def test_report_gates_pass_on_the_current_repository():
     failed = [m.label for m in report.metrics if not m.passed]
     assert not failed, f"以下指标没到及格线：{failed}"
     assert report.gates_passed is True
+
+
+# -- 导师库数据质量 ------------------------------------------------------------
+
+
+def _library(tmp_path, rows: list[tuple]) -> Path:
+    """造一个最小导师库：只建评测真正读的那几列。"""
+    import sqlite3
+
+    data_dir = tmp_path / "data"
+    data_dir.mkdir(parents=True, exist_ok=True)
+    db = data_dir / "advisors.db"
+    conn = sqlite3.connect(db)
+    conn.execute(
+        "CREATE TABLE advisors (name TEXT, title TEXT, email TEXT,"
+        " research_directions TEXT)"
+    )
+    conn.executemany("INSERT INTO advisors VALUES (?, ?, ?, ?)", rows)
+    conn.commit()
+    conn.close()
+    return tmp_path
+
+
+def test_missing_library_is_skipped_not_failed(tmp_path):
+    """新克隆的仓库没有导师库，评测要跳过并说明，不能算失败。"""
+    metrics, skipped = eval_advisor_library(tmp_path)
+
+    assert metrics == []
+    assert skipped and "advisors.db" in skipped[0]["reason"]
+
+
+def test_empty_json_fields_do_not_count_as_filled(tmp_path):
+    """空列表在库里存成 '[]'，而 '[]' 在 Python 里是真值——
+    不显式判空的话"字段有值率"会永远显示 100%，等于没测。"""
+    root = _library(tmp_path, [
+        ("甲", "", "", "[]"),
+        ("乙", "教授", "", "[]"),
+        ("丙", "[]", "  ", "null"),
+    ])
+
+    metrics = {m.key: m for m in eval_advisor_library(root)[0]}
+
+    assert metrics["library.advisors"].value == 3
+    assert metrics["library.field_fill_rate"].value == pytest.approx(1 / 3)
+
+
+def test_ui_word_residue_is_reported_and_gated(tmp_path):
+    root = _library(tmp_path, [("陆伟", "教授", "", "[]"), ("师资队伍", "", "", "[]")])
+
+    metric = {m.key: m for m in eval_advisor_library(root)[0]}["library.ui_word_residue"]
+
+    assert metric.value == 1
+    assert metric.gate == 0.0
+    assert metric.higher_is_better is False
+    assert metric.passed is False, "界面词残留必须判为不及格"
+
+
+def test_losing_a_real_person_is_a_regression(tmp_path):
+    """2026-09 的清洗事故删掉了 13 条真人，当时没有任何自动检查能发现。"""
+    root = _library(tmp_path, [("陆伟", "教授", "", "[]")])  # 故意不含 MUST_SURVIVE
+
+    metric = {m.key: m for m in eval_advisor_library(root)[0]}["library.must_survive_missing"]
+
+    assert metric.value > 0
+    assert metric.passed is False
+    assert "张学工" in metric.detail
+
+
+def test_healthy_library_passes_both_gates(tmp_path):
+    from advisor_fit.ingest.name_verify import MUST_SURVIVE_NAMES
+
+    rows = [(name, "教授", "", "[]") for name in MUST_SURVIVE_NAMES]
+    root = _library(tmp_path, rows)
+
+    metrics = {m.key: m for m in eval_advisor_library(root)[0]}
+
+    assert metrics["library.must_survive_missing"].value == 0
+    assert metrics["library.ui_word_residue"].value == 0
+    assert all(m.passed for m in metrics.values())

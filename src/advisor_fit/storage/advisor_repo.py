@@ -188,6 +188,76 @@ class AdvisorRepository:
             row = conn.execute("SELECT COUNT(*) AS n FROM advisors").fetchone()
         return int(row["n"])
 
+    def delete(self, university: str, department: str, name: str) -> None:
+        with closing(self._connect()) as conn:
+            conn.execute(
+                "DELETE FROM advisors WHERE university = ? AND department = ? AND name = ?",
+                (university, department, name),
+            )
+            conn.commit()
+
+    def clear_official(self, university: str | None = None) -> int:
+        """清掉官网采集的痕迹（重爬前清理用），社区/旧库数据保留。
+
+        - 只来自官网的行：直接删除；
+        - 官网 + 社区混合的行：保留内容，但**必须把 official 标记摘掉**，
+          否则重爬后的统计会把它们误算成"官网采集"。
+        """
+        where = " AND university = ?" if university else ""
+        params: list[str] = [university] if university else []
+        with closing(self._connect()) as conn:
+            rows = conn.execute(
+                f"SELECT * FROM advisors WHERE sources LIKE '%official%'{where}", params
+            ).fetchall()
+            removed = 0
+            for row in rows:
+                sources = json.loads(row["sources"] or "[]")
+                if sources == ["official"]:
+                    conn.execute(
+                        "DELETE FROM advisors"
+                        " WHERE university = ? AND department = ? AND name = ?",
+                        (row["university"], row["department"], row["name"]),
+                    )
+                    removed += 1
+                else:
+                    kept = [item for item in sources if item != "official"]
+                    conn.execute(
+                        "UPDATE advisors SET sources = ?"
+                        " WHERE university = ? AND department = ? AND name = ?",
+                        (
+                            json.dumps(kept, ensure_ascii=False),
+                            row["university"],
+                            row["department"],
+                            row["name"],
+                        ),
+                    )
+            conn.commit()
+        return removed
+
+    def delete_by_name_rule(self, reject) -> tuple[int, list[tuple[str, str, str]]]:
+        """按姓名规则删除条目（不分来源）。
+
+        reject(name) 返回 True 表示这个姓名不合规、应删除。
+        返回 (删除数, 被删样例(学校, 姓名, 来源))。
+        """
+        removed = 0
+        samples: list[tuple[str, str, str]] = []
+        with closing(self._connect()) as conn:
+            rows = conn.execute("SELECT * FROM advisors").fetchall()
+            for row in rows:
+                if not reject(row["name"]):
+                    continue
+                conn.execute(
+                    "DELETE FROM advisors WHERE university = ? AND department = ? AND name = ?",
+                    (row["university"], row["department"], row["name"]),
+                )
+                removed += 1
+                if len(samples) < 20:
+                    sources = json.loads(row["sources"] or "[]")
+                    samples.append((row["university"], row["name"], ",".join(sources)))
+            conn.commit()
+        return removed, samples
+
     def review_count(self) -> int:
         with closing(self._connect()) as conn:
             row = conn.execute("SELECT COUNT(*) AS n FROM reviews").fetchone()

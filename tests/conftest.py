@@ -6,12 +6,25 @@ from pathlib import Path
 
 import pytest
 
+from advisor_fit.config import settings
 from advisor_fit.llm.claims import ClaimsOutput
 from advisor_fit.llm.drafting import DraftOutput
 from advisor_fit.models.evidence import Claim, ClaimStatus
 from advisor_fit.models.match import DraftSentence, SentenceType
 
 FIXTURES_DIR = Path(__file__).parent / "fixtures"
+
+
+@pytest.fixture(autouse=True)
+def _tests_are_offline(monkeypatch):
+    """测试必须离线：默认清空 LLM Key，避免用例意外调用真实 API。
+
+    背景：一旦 .env 里配了 LLM_API_KEY，走完整流程的用例会真的去请求大模型，
+    导致超时、变慢、结果不确定。需要测试真实调用的地方请显式传 api_key。
+    """
+    monkeypatch.setattr(settings, "llm_api_key", "")
+    monkeypatch.setattr(settings, "llm_base_url", "")
+    monkeypatch.setattr(settings, "llm_model", "")
 
 
 @pytest.fixture

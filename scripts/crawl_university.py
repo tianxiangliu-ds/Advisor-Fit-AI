@@ -34,7 +34,6 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "src"))
 
 from advisor_fit.config import settings  # noqa: E402
-from advisor_fit.ingest.cv import looks_like_chinese_name  # noqa: E402
 from advisor_fit.ingest.faculty import (  # noqa: E402
     build_client,
     extract_links,
@@ -42,7 +41,12 @@ from advisor_fit.ingest.faculty import (  # noqa: E402
     fetch_html_rendered,
 )
 from advisor_fit.ingest.homepage import html_to_text  # noqa: E402
+from advisor_fit.ingest.name_verify import (  # noqa: E402
+    looks_like_person_name,
+    verify_with_llm,
+)
 from advisor_fit.ingest.supervisor_roster import split_note  # noqa: E402
+from advisor_fit.llm.provider import NullLLM, build_llm  # noqa: E402
 from advisor_fit.models.advisor import Advisor  # noqa: E402
 from advisor_fit.storage.advisor_repo import AdvisorRepository  # noqa: E402
 
@@ -161,6 +165,7 @@ class CollegeResult:
 
 
 _JS_ENABLED = False
+_LLM = None
 
 
 GENERIC_UNIT_NAMES = {
@@ -389,7 +394,7 @@ def extract_entries(html: str, base_url: str) -> list[dict]:
 
     for link in extract_links(html, base_url):
         text = re.sub(r"\s+", "", link["text"])
-        if text in NAME_STOPWORDS or not looks_like_chinese_name(text):
+        if text in NAME_STOPWORDS or not looks_like_person_name(text):
             continue
         item = _entry(text)
         if not item["homepage_url"]:
@@ -398,7 +403,7 @@ def extract_entries(html: str, base_url: str) -> list[dict]:
     for row in extract_table_rows(html):
         name = ""
         for cell in row:
-            if cell not in NAME_STOPWORDS and looks_like_chinese_name(cell):
+            if cell not in NAME_STOPWORDS and looks_like_person_name(cell):
                 name = cell
                 break
         if not name:
@@ -539,10 +544,18 @@ def crawl_college(
             pass
 
     if len(entries) < 3:
-        # 再试一层：有些学校师资入口先到「系/所」列表，再进具体名单
+        # 再试一层：很多学院的师资页只列「专任教师 / 实验人员 / 管理人员」等分类入口，
+        # 真正的姓名在分类页里，需要顺着这些入口再往下走一层。
         best: list[dict] = []
-        for link in extract_links(html, list_url)[:25]:
-            if not any(key in link["text"] for key in ("系", "所", "中心", "教研室")):
+        for link in extract_links(html, list_url)[:30]:
+            text = re.sub(r"\s+", "", link["text"])
+            if not any(
+                key in text
+                for key in (
+                    "系", "所", "中心", "教研室", "教师", "人员", "队伍", "系列",
+                    "教授", "副教授", "讲师", "博导", "硕导", "师资", "名录",
+                )
+            ):
                 continue
             try:
                 time.sleep(delay)
@@ -560,6 +573,18 @@ def crawl_college(
 
     result.entries = entries
     result.names = [item["name"] for item in entries]
+
+    # 大模型复核（配置了 LLM_API_KEY 才生效；没配置就跳过，不做任何删减）
+    if entries and _LLM is not None:
+        keep = set(verify_with_llm(_LLM, [item["name"] for item in entries], html_to_text(html)))
+        before = len(entries)
+        entries = [item for item in entries if item["name"] in keep]
+        result.entries = entries
+        result.names = [item["name"] for item in entries]
+        if len(entries) != before:
+            removed = before - len(entries)
+            result.note = (result.note + f"；AI 复核剔除 {removed} 个非人名").strip("；")
+
     if entries and details_per_college > 0:
         got = enrich_with_details(
             entries, client=client, delay=delay, limit=details_per_college, timeout=timeout
@@ -700,8 +725,14 @@ def main() -> int:
     )
     args = parser.parse_args()
 
-    global _JS_ENABLED
+    global _JS_ENABLED, _LLM
     _JS_ENABLED = args.js
+    llm = build_llm()
+    _LLM = None if isinstance(llm, NullLLM) else llm
+    if _LLM is None:
+        print("提示：未配置 LLM_API_KEY，本次只用规则过滤（姓名里含界面词的一律剔除）")
+    else:
+        print("已启用大模型复核：候选姓名会再经 AI 逐条确认")
 
     if args.only:
         wanted = [name.strip() for name in args.only.split(",") if name.strip()]

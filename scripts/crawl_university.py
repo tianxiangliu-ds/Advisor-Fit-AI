@@ -310,6 +310,19 @@ GENERIC_UNIT_NAMES = {
     "院系设置", "组织机构", "直属单位", "科研机构", "研究机构",
 }
 
+# 「学院（部）」「学院（系）」「学院(部)」这类是导航栏目名，不是某个具体的学院。
+# 各校写法不一，光靠固定清单会漏（天津大学就写作「学院（部）」，导致这个导航项
+# 被当成一个学院去抓，自然 0 人）。
+_GENERIC_UNIT_RE = re.compile(
+    r"^(?:学院|院系|教学单位|教学科研单位|教学机构|组织机构|直属单位|科研机构|研究机构)"
+    r"(?:[（(][^）)]{1,4}[）)])?$"
+)
+
+
+def _is_generic_unit(name: str) -> bool:
+    """这个"学院名"是不是导航栏目名而非具体学院。"""
+    return bool(_GENERIC_UNIT_RE.match(re.sub(r"\s+", "", name or "")))
+
 
 def _expand_generic_entries(
     colleges: list[tuple[str, str]], *, client=None, timeout: float = 20.0
@@ -318,7 +331,7 @@ def _expand_generic_entries(
     expanded: list[tuple[str, str]] = []
     seen = {name for name, _ in colleges}
     for name, url in colleges:
-        if name not in GENERIC_UNIT_NAMES and "/list." not in url:
+        if not _is_generic_unit(name) and "/list." not in url:
             expanded.append((name, url))
             continue
         try:
@@ -327,11 +340,14 @@ def _expand_generic_entries(
         except Exception:  # noqa: BLE001
             continue
         for sub_name, sub_url in _college_links(html, url):
-            if sub_name in seen or sub_name in GENERIC_UNIT_NAMES:
+            if sub_name in seen or _is_generic_unit(sub_name):
                 continue
             seen.add(sub_name)
             expanded.append((sub_name, sub_url))
-    return expanded or colleges
+    if expanded:
+        return expanded
+    # 展开失败时宁可只留下具体学院，也不要把导航栏目当学院返回
+    return [(name, url) for name, url in colleges if not _is_generic_unit(name)]
 
 
 def _fetch(url: str, *, client=None, timeout: float = 20.0, js: bool = False) -> str:
@@ -383,12 +399,17 @@ def _dedupe(urls: list[str]) -> list[str]:
 
 
 def candidate_dir_urls(html: str, base: str) -> list[str]:
-    """收集所有可能是「院系设置」入口的链接，强的排前面。"""
+    """收集所有可能是「院系设置」入口的链接，强的排前面。
+
+    除了「院系设置」这类固定叫法，**链接文字本身就是导航栏目名**的（如浙大的
+    「学院（系）」、天津大学的「学院（部）」）同样是目录入口。各校写法不统一，
+    只靠固定清单会漏——浙大就因此只找到 3 个研究院。
+    """
     strong: list[str] = []
     weak: list[str] = []
     for link in extract_links(html, base):
         text = re.sub(r"\s+", "", link["text"])
-        if any(key in text for key in COLLEGE_DIR_KEYS):
+        if any(key in text for key in COLLEGE_DIR_KEYS) or _is_generic_unit(text):
             strong.append(link["href"])
             continue
         path = urlparse(link["href"]).path.lower()

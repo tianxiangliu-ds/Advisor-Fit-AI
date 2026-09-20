@@ -37,6 +37,14 @@ class Settings(BaseSettings):
     # 可选：进入 OpenAlex / Crossref 的「礼貌池」用的联系邮箱，留空也能用
     contact_email: str = ""
 
+    # 可选：语义召回用的向量接口（OpenAI 兼容 /embeddings）。
+    # 留空则用内置的离线档——它只做**表层相似**，不是同义词理解，详见 providers/embedding.py
+    embedding_base_url: str = ""
+    embedding_api_key: str = ""
+    embedding_model: str = ""
+    # 可选：本机模型名（需自行安装 sentence-transformers，见 pyproject 的 embed 分组）
+    embedding_local_model: str = ""
+
     data_dir: Path = _ROOT / "data"
     uploads_dir: Path = _ROOT / "uploads"
     exports_dir: Path = _ROOT / "exports"

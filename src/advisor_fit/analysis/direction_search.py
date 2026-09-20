@@ -20,6 +20,7 @@ import re
 from dataclasses import dataclass
 
 from advisor_fit.models.advisor import Advisor
+from advisor_fit.providers.embedding import Embedder
 
 # 参与匹配的字段 -> 权重与中文名（展示"命中了哪里"时要用）
 FIELD_WEIGHTS: dict[str, int] = {
@@ -36,6 +37,11 @@ FIELD_LABELS: dict[str, str] = {
     "department": "院系",
     "publications": "代表论文",
     "profile_text": "简介正文",
+    # 向量召回单独标记：它和关键词命中是两回事，不能混成一种理由。
+    # 再按后端能力分成两种说法——默认的离线档只做表层相似，把它写成"语义相近"
+    # 就是夸大；真正的语义要配了 embedding 接口或本机模型才有。
+    "semantic": "语义相近",
+    "surface": "字面相近",
 }
 
 # 资料完整度看这几个字段：有方向、有职称、有邮箱、有主页
@@ -154,6 +160,13 @@ class DirectionHit:
     match_score: int
     reasons: tuple[MatchReason, ...]
     completeness: float
+    # 语义相似度 0–1；默认档（表层相似）也会给出值，但没有语义理由时不影响排序
+    semantic_score: float = 0.0
+
+    @property
+    def has_semantic_reason(self) -> bool:
+        """是否带向量召回理由（真语义或表层相似都算）。"""
+        return any(reason.field in ("semantic", "surface") for reason in self.reasons)
 
     @property
     def reason_text(self) -> str:
@@ -193,34 +206,85 @@ def rank_candidates(
     universities: list[str] | None = None,
     limit: int = 20,
     min_match_score: int = 2,
+    embedder: Embedder | None = None,
+    min_similarity: float | None = None,
+    min_semantic_only: float | None = None,
 ) -> list[DirectionHit]:
-    """按关键词给候选导师打分排序。
+    """给候选导师打分排序：关键词为主，语义召回为辅。
 
     min_match_score 默认 2：也就是至少要在「院系/代表论文」这类字段命中一次，
     只在简介正文里出现过关键词的不算——那多半是噪声（页面里恰好提到该词）。
+
+    传了 `embedder` 时会额外算语义相似度，作用是**两条**：
+    1. 关键词已命中的候选，若同时语义也近，补一条「语义相近」的理由并略微提权；
+    2. 关键词一个都没中、但语义明显相近的候选，也会被召回——这正是语义召回的意义
+       （捞回"没命中字面但意思接近"的人）。这类候选门槛更高，避免灌进噪声。
+
+    不传 `embedder` 时行为与以前**完全一致**，所以这是一条纯增量的分支。
     """
+    # 门槛由后端自己声明：离线档与真模型的分值尺度差得很远，
+    # 用一套通用阈值会让某一档彻底失效（实测离线档最高只有 0.41）。
+    if embedder is not None:
+        min_similarity = (
+            embedder.reason_threshold if min_similarity is None else min_similarity
+        )
+        min_semantic_only = (
+            embedder.recall_threshold if min_semantic_only is None else min_semantic_only
+        )
+
     wanted = {university.strip() for university in (universities or []) if university.strip()}
+    candidates = [
+        advisor for advisor in advisors
+        if not wanted or advisor.university in wanted
+    ]
+
+    similarities = [0.0] * len(candidates)
+    if embedder is not None and candidates:
+        from advisor_fit.analysis.semantic import semantic_scores  # noqa: PLC0415
+
+        similarities = semantic_scores(" ".join(terms), candidates, embedder)
+
     scored: list[DirectionHit] = []
-    for advisor in advisors:
-        if wanted and advisor.university not in wanted:
-            continue
-        reasons = match_reasons(advisor, terms)
+    for advisor, similarity in zip(candidates, similarities, strict=True):
+        reasons = list(match_reasons(advisor, terms))
         match_score = sum(reason.weight for reason in reasons)
-        if match_score < min_match_score:
+        keyword_hit = match_score >= min_match_score
+        semantic_reason = False
+
+        # 说法随后端能力变：真语义才配叫"语义相近"，离线档只能叫"字面相近"
+        vector_field = "semantic" if (embedder is not None and embedder.semantic) else "surface"
+        vector_term = "意思相近" if vector_field == "semantic" else "用词相近"
+
+        if embedder is not None and similarity >= min_semantic_only:
+            # 向量相似度**明显**偏高：无论关键词有没有命中都召回。
+            # 关键词没中但向量很近的，正是这套机制存在的意义。
+            reasons.append(MatchReason(term=vector_term, field=vector_field, weight=1))
+            semantic_reason = True
+        elif embedder is not None and keyword_hit and similarity >= min_similarity:
+            # 关键词已经命中了，向量也算近：补一条理由，让排序略微靠前。
+            # 这条门槛低，但**必须先有关键词命中**才用得上——
+            # 否则低门槛会绕过"仅向量召回"该有的高门槛，把噪声放进来。
+            reasons.append(MatchReason(term=vector_term, field=vector_field, weight=1))
+            semantic_reason = True
+
+        if not keyword_hit and not semantic_reason:
             continue
-        score = match_score + completeness(advisor)
+
         scored.append(
             DirectionHit(
                 advisor=advisor,
-                score=score,
+                score=match_score + completeness(advisor),
                 match_score=match_score,
-                reasons=reasons,
+                reasons=tuple(reasons),
                 completeness=completeness(advisor),
+                semantic_score=round(float(similarity), 4),
             )
         )
+
     scored.sort(
         key=lambda hit: (
             -hit.match_score,
+            -hit.semantic_score,
             -hit.completeness,
             hit.advisor.university,
             hit.advisor.name,

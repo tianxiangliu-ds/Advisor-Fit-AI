@@ -369,6 +369,19 @@ def _faculty_repo():
     return FacultyRepository(settings.data_dir / "faculty.db")
 
 
+@st.cache_resource(show_spinner=False)
+def _embedder():
+    """语义召回用的向量后端（可替换）。构建一次复用。
+
+    默认是内置的离线档——它只做**表层相似**，不是同义词理解；
+    配了 embedding 接口或装了本机模型才会升级。界面上的措辞按
+    `embedder.semantic` 区分，不会把表层相似说成"语义理解"。
+    """
+    from advisor_fit.providers.embedding import build_embedder
+
+    return build_embedder()
+
+
 def _advisor_repo() -> AdvisorRepository:
     """统一导师库（3 万条，全项目唯一的一份导师数据）。"""
     return AdvisorRepository(settings.data_dir / "advisors.db")
@@ -917,6 +930,9 @@ if active_page == "direction":
                     for hit in hits
                 ]
                 st.session_state["direction_terms"] = terms
+                st.session_state["direction_backend"] = (
+                    "语义相近" if _embedder().semantic else "字面相近"
+                )
                 st.session_state.pop("direction_picked", None)
 
         hits = st.session_state.get("direction_hits") or []
@@ -926,8 +942,18 @@ if active_page == "direction":
                         unsafe_allow_html=True)
             st.caption(
                 f"关键词：{'、'.join(terms)}　·　共 {len(hits)} 位候选，"
-                "按「命中权重 → 资料完整度」排序；匹配理由就是推荐依据，请自行核对。"
+                "按「命中权重 → 向量相似度 → 资料完整度」排序；"
+                "匹配理由就是推荐依据，请自行核对。"
             )
+            _backend = st.session_state.get("direction_backend")
+            if _backend == "字面相近":
+                st.caption(
+                    "提示：当前用的是内置的离线向量档，它只能识别**字面相近**"
+                    "（词序不同、部分重合），认不出同义词。要真正的语义召回，"
+                    "请在 `.env` 里配置 embedding 接口，或安装 `embed` 可选依赖。"
+                )
+            elif _backend == "语义相近":
+                st.caption("当前已启用语义向量后端，可召回「没命中字面但意思接近」的候选。")
             st.dataframe(
                 [
                     {

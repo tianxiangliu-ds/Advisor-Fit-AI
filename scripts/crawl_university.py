@@ -136,6 +136,16 @@ GRAD_SITES: dict[str, str] = {
 # 研究生招生页里"培养单位"链接的文字特征：如「104信息管理学院(2026年)>」
 _GRAD_UNIT_RE = re.compile(r"^\d{2,3}\s*(.+?)(?:[（(]\s*20\d{2}\s*年\s*[)）])?[>\s]*$")
 
+# 一所学校招研究生的培养单位通常在 15 个以上；少于这个数说明名单没解析对，
+# 此时**必须放弃筛选**——拿半截名单去排除真实学院，会把整所学校爬成 0 人。
+MIN_CREDIBLE_UNITS = 12
+
+# 研究生院站内，招生单位名单可能挂在这些栏目下
+GRAD_UNIT_PAGE_KEYS = (
+    "招生简章", "招生专业目录", "专业目录", "培养单位", "招生单位",
+    "硕士招生", "招生专业", "招生信息", "院系设置",
+)
+
 
 def _normalize_unit_name(text: str) -> str:
     """把「104信息管理学院(2026年)>」规整成「信息管理学院」，便于与学院官网名对齐。"""
@@ -146,16 +156,11 @@ def _normalize_unit_name(text: str) -> str:
     return name.replace("（", "(").replace("）", ")")
 
 
-def discover_graduate_units(grad_url: str, *, client=None, timeout: float = 20.0) -> list[str]:
-    """从研究生院页面取出"招研究生的培养单位"名单。
-
-    这一步用于**筛选**：只爬确实招研究生的学院，排除「孔子学院」这类与硕博招生
-    无关的单位，避免把无用数据写进库。
-    """
-    html = _fetch_with_fallback(grad_url, client=client, timeout=timeout)
+def _unit_links(html: str, base_url: str) -> list[str]:
+    """从一页 HTML 里抽出形如「104信息管理学院(2026年)」的培养单位名。"""
     units: list[str] = []
     seen: set[str] = set()
-    for link in extract_links(html, grad_url):
+    for link in extract_links(html, base_url):
         raw = re.sub(r"\s+", "", link["text"])
         if not any(key in raw for key in ("学院", "研究院", "实验室", "学系", "中心", "医院")):
             continue
@@ -167,6 +172,62 @@ def discover_graduate_units(grad_url: str, *, client=None, timeout: float = 20.0
         seen.add(name)
         units.append(name)
     return units
+
+
+def discover_graduate_units(
+    grad_url: str, *, client=None, timeout: float = 20.0,
+    min_units: int = MIN_CREDIBLE_UNITS, max_pages: int = 8,
+) -> list[str]:
+    """从研究生院网站取出"招研究生的培养单位"名单。
+
+    大多数学校的研究生院首页并不直接列培养单位，真正的名单在
+    「招生信息 → 硕士招生 → 招生简章 / 专业目录」这类页面里。这里按广度优先
+    往下找最多 `max_pages` 页，取找到的最长名单。
+
+    **拿不到可信名单时返回空列表**，由调用方据此不做筛选。宁可不筛选（多爬几个
+    无关单位），也绝不能拿半截名单把真实学院排除掉。
+    """
+    html = _fetch_with_fallback(grad_url, client=client, timeout=timeout)
+    best = _unit_links(html, grad_url)
+    if len(best) >= min_units:
+        return best
+
+    visited = {grad_url}
+    frontier: list[tuple[str, str]] = [(grad_url, html)]
+    pages = 0
+    while frontier and pages < max_pages:
+        base, page_html = frontier.pop(0)
+        for link in extract_links(page_html, base):
+            text = re.sub(r"\s+", "", link["text"])
+            if not any(key in text for key in GRAD_UNIT_PAGE_KEYS):
+                continue
+            url = link["href"]
+            if url in visited:
+                continue
+            visited.add(url)
+            pages += 1
+            if pages > max_pages:
+                break
+            try:
+                sub_html = _fetch_with_fallback(url, client=client, timeout=timeout)
+            except Exception:  # noqa: BLE001 - 单页取不到就试下一页
+                continue
+            found = _unit_links(sub_html, url)
+            if len(found) > len(best):
+                best = found
+            if len(best) >= min_units:
+                print(f"  研究生院名单取自：{url}", flush=True)
+                return best
+            frontier.append((url, sub_html))
+
+    if len(best) < min_units:
+        print(
+            f"  研究生院名单只解析出 {len(best)} 个培养单位（少于 {min_units}），"
+            f"判定为不可信，本次不做筛选",
+            flush=True,
+        )
+        return []
+    return best
 
 
 def _unit_matches(college: str, units: list[str]) -> bool:
@@ -959,10 +1020,22 @@ def crawl_university(
     if graduate_units:
         kept = [item for item in colleges if _unit_matches(item[0], graduate_units)]
         dropped = [item[0] for item in colleges if not _unit_matches(item[0], graduate_units)]
-        print(f"按研究生院培养单位筛选：保留 {len(kept)} 个，排除 {len(dropped)} 个", flush=True)
-        if dropped:
-            print(f"  已排除：{'、'.join(dropped[:8])}", flush=True)
-        colleges = kept
+        # 二道保险：正常学校的研究生培养单位能覆盖大半学院。如果排除比例过半，
+        # 说明名单和学院官网名对不上（多半是解析错页），此时不筛选才是对的。
+        if len(colleges) >= 6 and len(kept) * 2 < len(colleges):
+            print(
+                f"  警告：培养单位名单只匹配上 {len(kept)}/{len(colleges)} 个学院，"
+                f"判定名单不可信，本次不筛选",
+                flush=True,
+            )
+        else:
+            print(
+                f"按研究生院培养单位筛选：保留 {len(kept)} 个，排除 {len(dropped)} 个",
+                flush=True,
+            )
+            if dropped:
+                print(f"  已排除：{'、'.join(dropped[:8])}", flush=True)
+            colleges = kept
     if only_college:
         colleges = [(name, url) for name, url in colleges if name == only_college]
     if max_colleges:

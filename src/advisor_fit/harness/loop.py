@@ -22,6 +22,7 @@ from typing import Any
 from pydantic import BaseModel
 
 from advisor_fit.harness.budget import BudgetTracker
+from advisor_fit.harness.context import ContextBudget, build_payload
 from advisor_fit.harness.tools import LegacyTool, ToolRegistry, ToolSpec
 from advisor_fit.harness.trace import RunTrace, digest_args
 from advisor_fit.llm.prompts import prompt_text
@@ -132,6 +133,7 @@ def run_loop(
     registry: ToolRegistry | None = None,
     budget: BudgetTracker | None = None,
     trace: RunTrace | None = None,
+    context_budget: ContextBudget | None = None,
 ) -> list[dict]:
     """反复「LLM 决策 → 执行工具 → 结果回传」，直到 done/confirm 或步数用尽。
 
@@ -148,6 +150,7 @@ def run_loop(
 
     steps = list(resume_steps or [])
     granted = set(granted_confirmations or [])
+    context_budget = context_budget or ContextBudget()
     # 单轮调用次数，用于执行 spec.rate_limit_per_run
     tool_calls: Counter[str] = Counter()
 
@@ -165,7 +168,10 @@ def run_loop(
                     return steps
                 budget.record_step()
 
-            payload = {"task": task, "tools": _tool_payload(registry), "history": steps}
+            # 上下文压缩：steps 里带着整份论文列表，原样喂给模型会随步数无限膨胀
+            payload = build_payload(
+                task=task, tools=_tool_payload(registry), steps=steps, budget=context_budget
+            )
             started = time.monotonic()
             try:
                 decision = llm.generate(

@@ -25,6 +25,7 @@ from pydantic import BaseModel, Field
 
 from advisor_fit import __version__
 from advisor_fit.agents.tools import TOOL_SPECS
+from advisor_fit.harness.state import RunState
 from advisor_fit.services.research import (
     ResearchRequest,
     describe_source_health,
@@ -43,6 +44,13 @@ class ResearchBody(BaseModel):
     discipline: str = Field(default="", description="学科方向，决定补查哪些专业库")
     seed_titles: list[str] = Field(default_factory=list, description="代表论文标题，按标题兜底")
     known_directions: list[str] = Field(default_factory=list, description="已知研究方向")
+    state: dict[str, Any] | None = Field(
+        default=None,
+        description=(
+            "续跑用：把上次返回的 state 原样传回来，Agent 会接着走而不是从头再来。"
+            "用户对确认问题的答复请写进 state.granted。"
+        ),
+    )
 
 
 class ToolBody(BaseModel):
@@ -64,6 +72,8 @@ class ResearchResponse(BaseModel):
     degraded_reason: str = ""
     health: dict[str, Any] | None = None
     mode: str = "agent"
+    stages: list[str] = Field(default_factory=list, description="经过的工作流阶段")
+    state: dict[str, Any] = Field(default_factory=dict, description="可续跑的运行状态")
     note: str = Field(default="", description="给调用方的提醒，例如「结果需人工确认归属」")
 
 
@@ -125,6 +135,7 @@ def create_app(
                 seed_titles=[t for t in body.seed_titles if t.strip()],
                 known_directions=[d for d in body.known_directions if d.strip()],
             ),
+            state=RunState.from_dict(body.state),
             llm_factory=llm_factory,
             provider_factory=provider_factory,
         )
@@ -143,6 +154,8 @@ def create_app(
             degraded_reason=outcome.degraded_reason,
             health=outcome.health,
             mode=outcome.mode,
+            stages=outcome.trace.get("stages", []),
+            state=outcome.state.to_dict() if outcome.state else {},
             note=(
                 "论文归属需人工确认；本接口不做录取预测，也不判断是否在招生"
                 if outcome.papers

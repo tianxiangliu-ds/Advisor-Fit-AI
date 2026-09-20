@@ -24,6 +24,7 @@ from advisor_fit.analysis.direction_search import (
 from advisor_fit.analysis.identity import STATUS_LABELS, assess_identity
 from advisor_fit.config import settings
 from advisor_fit.export.report import export_docx, export_json, export_markdown
+from advisor_fit.harness.state import RunState
 from advisor_fit.ingest.cv import (
     apply_fact_edits,
     build_student_profile,
@@ -77,7 +78,7 @@ _PROFESSOR_STATE_KEYS = (
     "prof_name", "prof_institution", "prof_department", "prof_title", "prof_email",
     "prof_interests", "prof_homepage", "prof_english_name", "prof_search_institution",
     "prof_seed_titles", "_faculty_directions", "_faculty_seed_titles",
-    "candidate_papers", "_research_confirm", "_research_steps", "_research_granted",
+    "candidate_papers", "_research_confirm", "_run_state",
     "_research_degraded", "_research_sources", "_research_discipline", "_research_health",
     "_agent_trace",
     "field_report", "identity_result", "homepage_profile",
@@ -236,8 +237,7 @@ def _run_research(
             known_directions=list(known_directions or []),
         ),
         llm=_llm(),
-        resume_steps=st.session_state.get("_research_steps"),
-        granted_confirmations=st.session_state.get("_research_granted", []),
+        state=RunState.from_dict(st.session_state.get("_run_state")),
     )
 
     st.session_state["_research_degraded"] = outcome.degraded_reason
@@ -257,11 +257,12 @@ def _run_research(
 
     if outcome.needs_confirmation:
         st.session_state["_research_confirm"] = outcome.needs_confirmation
-        st.session_state["_research_steps"] = outcome.steps
     else:
         st.session_state.pop("_research_confirm", None)
-        st.session_state["_research_steps"] = None
-        st.session_state["_research_granted"] = []
+    # 一个对象就是全部可续跑状态（阶段/步骤/已授权/候选论文）
+    st.session_state["_run_state"] = (
+        outcome.state.to_dict() if outcome.state else None
+    )
     st.session_state.candidate_papers = outcome.papers
 
 
@@ -1319,8 +1320,7 @@ if active_page == "professor":
                 if profile.publications:
                     st.session_state["prof_seed_titles"] = "\n".join(profile.publications)
                 if profile.name:
-                    st.session_state["_research_steps"] = None
-                    st.session_state["_research_granted"] = []
+                    st.session_state["_run_state"] = None
                     st.session_state["_auto_search"] = True
                 st.success("已解析主页，字段已填入下方表格，请核对后继续。")
             elif fetched is not None and not fetched.ok:
@@ -1499,12 +1499,13 @@ if active_page == "papers":
         st.caption("请选择处理方式：")
         c1, c2, c3 = st.columns(3)
         if c1.button("✅ 确认并继续", use_container_width=True):
-            st.session_state["_research_granted"] = [msg]
+            state = RunState.from_dict(st.session_state.get("_run_state"))
+            state.grant(msg)
+            st.session_state["_run_state"] = state.to_dict()
             _trigger_search()
         if c2.button("🔁 去掉学校重新检索", use_container_width=True):
             st.session_state.pop("_research_confirm", None)
-            st.session_state["_research_steps"] = None
-            st.session_state["_research_granted"] = []
+            st.session_state["_run_state"] = None
             _run_research(
                 search_name, "", selected_mode, english_name.strip(),
                 search_institution.strip(), seed_titles, faculty_directions,
@@ -1515,8 +1516,7 @@ if active_page == "papers":
                 paper["belongs"] = True
                 paper["needs_review"] = False
             st.session_state.pop("_research_confirm", None)
-            st.session_state["_research_steps"] = None
-            st.session_state["_research_granted"] = []
+            st.session_state["_run_state"] = None
         if insts:
             st.caption("或按机构保留（应对导师刚调动单位的情况）：")
             icols = st.columns(len(insts[:4]))
@@ -1529,8 +1529,7 @@ if active_page == "papers":
                         if not keep:
                             paper["user_confirmed"] = False
                     st.session_state.pop("_research_confirm", None)
-                    st.session_state["_research_steps"] = None
-                    st.session_state["_research_granted"] = []
+                    st.session_state["_run_state"] = None
 
     # Agent 运行轨迹：跑过一次检索后才出现（没跑过不显示空面板）
     _render_agent_trace(st.session_state.get("_agent_trace"))

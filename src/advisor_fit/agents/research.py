@@ -25,11 +25,18 @@ from advisor_fit.agents.tools import (
 from advisor_fit.harness.budget import BudgetTracker
 from advisor_fit.harness.loop import run_loop
 from advisor_fit.harness.trace import RunTrace, digest_args
+from advisor_fit.harness.workflow import Stage
 from advisor_fit.llm.prompts import prompt_text
 from advisor_fit.llm.provider import NullLLM
 from advisor_fit.providers.academic import Work
 from advisor_fit.providers.affiliation import institutions_conflict
 from advisor_fit.providers.crossref import CrossrefProvider
+
+
+def _mark(trace: RunTrace | None, stage: Stage) -> None:
+    """记录工作流阶段；trace 为空时什么都不做。"""
+    if trace is not None:
+        trace.mark_stage(stage)
 
 
 def work_to_paper(work: Work) -> dict:
@@ -353,6 +360,8 @@ def research_professor(
     )
 
     # 预热：确定性先查一轮，交给 LLM 判断是否扩搜/换库。
+    if trace is not None:
+        trace.mark_stage(Stage.SEEDING)
     seed_steps: list[dict] = []
     if resume_steps is None:
         seed_source = source or "auto"
@@ -387,6 +396,8 @@ def research_professor(
                     _make_step("search_by_title", {"title": title}, result)
                 )
 
+    if trace is not None:
+        trace.mark_stage(Stage.SEARCHING)
     steps = run_loop(
         llm,
         task=task,
@@ -406,6 +417,8 @@ def research_professor(
 
     papers = _merge_search_results(steps)
     if needs_confirmation:
+        if trace is not None:
+            trace.mark_stage(Stage.AWAITING_CONFIRMATION)
         return ResearchResult(
             papers=papers,
             needs_confirmation=needs_confirmation,
@@ -417,10 +430,12 @@ def research_professor(
         llm, papers, professor_name=name, institution=institution,
         known_directions=known_directions,
     )
+    _mark(trace, Stage.INVESTIGATING)
     papers = _investigate_affiliations(
         provider, name, papers, institution, source or "auto", english_name,
         discipline=discipline,
     )
+    _mark(trace, Stage.DONE)
     return ResearchResult(papers=papers, log=steps, trace=trace)
 
 
@@ -491,6 +506,9 @@ def _research_without_llm(
         # 规则路径没有模型决策，不能假装有；但**它真的调用了哪些检索要如实记**。
         # 否则没配 Key 的演示站上，访客点完「一键研究」看到的轨迹区几乎是空的。
         trace.mode = "rule"
+        trace.mark_stage(Stage.SEEDING)
+        trace.mark_stage(Stage.SEARCHING)
+        trace.mark_stage(Stage.DISAMBIGUATING)
 
     def _record(tool: str, args: dict, count: int, started: float) -> None:
         if trace is None:
@@ -533,6 +551,7 @@ def _research_without_llm(
     papers = _dedupe_papers(papers)
     _rule_disambiguate(papers, institution)
     if trace is not None:
+        trace.mark_stage(Stage.DONE)
         trace.add(
             kind="done", name="rule_pipeline",
             summary=f"papers={len(papers)}（规则路径，未使用大模型）",

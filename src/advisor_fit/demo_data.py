@@ -151,6 +151,8 @@ def demo_agent_trace(professor_name: str = "示例导师") -> dict:
     return {
         "task": f"检索导师「{professor_name}」的候选论文（示例轨迹，非真实运行）",
         "mode": "agent",
+        # 走到"请求人工确认"就停了——与下面最后一步的 confirmation 对应
+        "stages": ["seeding", "searching", "awaiting_confirmation"],
         "tools": [
             {"name": "search_by_author", "description": "按姓名+学校在多个学术库中检索候选论文",
              "parameters": {"type": "object",

@@ -331,6 +331,7 @@ st.markdown('<p class="page-intro">一句中文说明，告诉用户这一步要
 |---|---|
 | `.trace-panel` 容器 | 底 `#fffdf9` / `1px solid var(--line)` / 圆角 `6px` / **无阴影** |
 | `.trace-task` 任务行 | `padding:13px 18px` / `border-bottom:1px solid var(--line)` / `.8rem` / 颜色 `#52545b` |
+| `.trace-stages` 阶段链 | `padding:11px 18px` / `border-bottom:1px solid var(--line)` / `.72rem` / 颜色 `#847f78`；当前阶段（最后一个）用 `var(--purple)` |
 | `.trace-meta` 概览行 | `display:flex` / `gap:22px` / `padding:14px 18px` / `border-bottom:1px solid var(--line)` |
 | `.trace-meta span` 概览标签 | `.67rem Arial` / `letter-spacing:.14em` / 颜色 `#847f78` |
 | `.trace-meta b` 概览数值 | `1.03rem Georgia` / 字重 400 / 颜色 `#282a33` |

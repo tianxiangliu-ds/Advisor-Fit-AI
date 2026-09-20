@@ -66,3 +66,16 @@ def test_demo_trace_is_declared_as_fictional(tmp_path):
     for trace in _load_traces(data_dir):
         assert trace is not None
         assert "示例" in trace["task"] or "演示" in trace["task"]
+
+
+def test_demo_trace_carries_workflow_stages():
+    """示例轨迹要带上工作流阶段，否则演示里看不到阶段链。"""
+    from advisor_fit.harness.workflow import Stage
+
+    stages = demo_agent_trace()["stages"]
+
+    assert stages, "示例轨迹必须有阶段"
+    assert stages[0] == str(Stage.SEEDING)
+    assert str(Stage.SEARCHING) in stages
+    # 示例里最后停在"请求人工确认"，阶段也应当停在那里
+    assert stages[-1] == str(Stage.AWAITING_CONFIRMATION)

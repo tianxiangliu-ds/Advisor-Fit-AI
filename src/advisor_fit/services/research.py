@@ -18,6 +18,7 @@ from typing import Any
 from advisor_fit.agents.research import ResearchResult, research_professor
 from advisor_fit.config import settings
 from advisor_fit.harness.budget import BudgetLimits, BudgetTracker
+from advisor_fit.harness.state import RunState, state_from_outcome
 from advisor_fit.harness.trace import RunTrace
 from advisor_fit.llm.provider import NullLLM, build_llm
 
@@ -49,6 +50,8 @@ class ResearchOutcome:
     degraded_reason: str = ""
     health: dict[str, Any] | None = None
     mode: str = "agent"
+    # 可续跑的运行状态：序列化成 JSON 就能跨请求传递，续跑时原样传回 run_research
+    state: RunState | None = None
 
     @property
     def ok(self) -> bool:
@@ -108,6 +111,7 @@ def run_research(
     provider=None,
     limits: BudgetLimits | None = None,
     max_steps: int = 6,
+    state: RunState | None = None,
     resume_steps: list[dict[str, Any]] | None = None,
     granted_confirmations: list[str] | None = None,
     llm_factory: Callable[[], Any] | None = None,
@@ -118,10 +122,14 @@ def run_research(
     可注入 `llm` / `provider` 便于测试；不注入时按配置构建（没有 Key 时自动
     退化为确定性规则路径，核心流程仍然可用）。
 
-    `resume_steps` / `granted_confirmations` 用于**确认门控的续跑**：Agent 停下来
-    问"这批论文是不是同名的人"之后，前端带着已产生的步骤和用户已授权的答复再调
-    一次，循环会接着走而不是从头再来。
+    **确认门控的续跑**用 `state`：Agent 停下来问"这批论文是不是同名的人"之后，
+    调用方把上次返回的 `RunState` 原样传回来（用户答复已通过 `state.grant()` 记进去），
+    循环会接着走而不是从头再来。一个对象就是全部状态，不必猜要带哪几个字段。
+    `resume_steps` / `granted_confirmations` 保留给只需要其中一项的调用方。
     """
+    if state is not None:
+        resume_steps = state.steps
+        granted_confirmations = state.granted
     budget = BudgetTracker(limits) if limits is not None else BudgetTracker()
     if provider is None:
         factory = provider_factory or build_provider
@@ -149,7 +157,7 @@ def run_research(
     )
 
     health = source_health(provider)
-    return ResearchOutcome(
+    outcome = ResearchOutcome(
         papers=result.papers,
         needs_confirmation=result.needs_confirmation,
         steps=result.log,
@@ -160,6 +168,8 @@ def run_research(
         health=health,
         mode=trace.mode,
     )
+    outcome.state = state_from_outcome(outcome, task=request.name)
+    return outcome
 
 
 def llm_configured() -> bool:

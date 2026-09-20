@@ -49,6 +49,9 @@ class RunTrace(BaseModel):
     # 这次运行是哪种模式：agent（大模型决策）| rule（未配模型时的确定性规则路径）。
     # 界面据此决定措辞——规则路径没有"模型可选工具"这回事，不能假装有。
     mode: str = "agent"
+    # 这次运行经过的工作流阶段（见 harness/workflow.py）。
+    # 单独的字段而不是塞进 steps：阶段不是"一顿操作"，混进去会污染步骤计数与耗时统计。
+    stages: list[str] = Field(default_factory=list)
     # 这次运行**提供给模型**的工具清单（名称 / 说明 / 参数 schema / 权限）。
     # 只记"实际调用了什么"是不够的——看不出 Agent 当时有哪些选择，也就无法复盘
     # "它为什么没选另一个工具"。
@@ -87,6 +90,12 @@ class RunTrace(BaseModel):
 
     def total_tokens(self) -> int:
         return sum(step.tokens_in + step.tokens_out for step in self.steps)
+
+    def mark_stage(self, stage: str) -> None:
+        """记录进入某个工作流阶段。连续重复标记只记一次。"""
+        value = str(stage)
+        if not self.stages or self.stages[-1] != value:
+            self.stages.append(value)
 
     def total_duration_ms(self) -> int:
         return sum(step.duration_ms for step in self.steps)

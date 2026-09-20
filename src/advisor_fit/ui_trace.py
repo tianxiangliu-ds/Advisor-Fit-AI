@@ -13,6 +13,8 @@ from __future__ import annotations
 from html import escape
 from typing import Any
 
+from advisor_fit.harness.workflow import stage_label
+
 # 轨迹步骤类型 → 中文标签
 KIND_LABELS: dict[str, str] = {
     "llm_decision": "模型决策",
@@ -102,8 +104,25 @@ def trace_step_html(step: dict[str, Any]) -> str:
     return '<div class="trace-step">' + "".join(parts) + "</div>"
 
 
+def trace_stages_html(trace: dict[str, Any]) -> str:
+    """工作流阶段链：把「这次走到哪一步了」显示出来。
+
+    只看工具调用看不出整条流水线的位置——尤其在它停在人工确认时，
+    用户需要知道"是走到一半停的"还是"本来就这么短"。
+    """
+    stages = trace.get("stages") or []
+    if not stages:
+        return ""
+    parts: list[str] = []
+    for index, stage in enumerate(stages):
+        label = escape(stage_label(stage))
+        # 最后一个阶段是"当前所处的位置"，用紫色点出来
+        parts.append(f"<b>{label}</b>" if index == len(stages) - 1 else label)
+    return '<div class="trace-stages">' + " → ".join(parts) + "</div>"
+
+
 def trace_panel_html(trace: dict[str, Any]) -> str:
-    """任务行 + 概览行 + 全部步骤。调用方需保证 trace 里确实有内容。"""
+    """任务行 + 阶段链 + 概览行 + 全部步骤。调用方需保证 trace 里确实有内容。"""
     task = str(trace.get("task") or "").strip()
     task_html = f'<div class="trace-task">{escape(task)}</div>' if task else ""
     meta = "".join(
@@ -111,8 +130,9 @@ def trace_panel_html(trace: dict[str, Any]) -> str:
         for label, value in trace_overview(trace)
     )
     rows = "".join(trace_step_html(step) for step in (trace.get("steps") or []))
+    stages_html = trace_stages_html(trace)
     return (
-        f'<div class="trace-panel">{task_html}'
+        f'<div class="trace-panel">{task_html}{stages_html}'
         f'<div class="trace-meta">{meta}</div>{rows}</div>'
     )
 

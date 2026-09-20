@@ -32,6 +32,11 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from urllib.parse import urljoin, urlparse
 
+# 控制台默认可能是 GBK，中文日志会乱码或直接报 UnicodeEncodeError；
+# 统一改成 UTF-8 输出，日志文件才能直接读。
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "src"))
 
@@ -246,10 +251,16 @@ COLLEGE_DIR_KEYS = (
     "院系设置", "学院设置", "院系概况", "学部院系", "院系机构", "院系介绍",
     "学院部门", "组织机构", "院系导航", "教学单位", "院系",
 )
-# 学院首页里「师资」入口的常见叫法
+# 学院首页里「师资」入口的常见叫法。各校写法差异极大——浙大哲学学院叫「教工名录」，
+# 若不在表里就一个入口都找不到，整所学院变成 0 人。
+# 顺序有意义：越具体的排越前面，避免先匹配到「教师发展」这类行政栏目。
 FACULTY_KEYS = (
-    "师资队伍", "师资力量", "师资概况", "师资介绍", "教师队伍", "教师名录",
-    "专任教师", "专职教师", "导师队伍", "导师介绍", "全体教师", "教师介绍", "师资",
+    "师资队伍", "师资力量", "师资概况", "师资介绍", "师资名录", "师资",
+    "教工名录", "教工名册", "教职工名录", "教师名录", "教师名单", "教师队伍",
+    "教师介绍", "专任教师", "专职教师", "全体教师", "教职员工", "教师风采",
+    "导师队伍", "导师介绍", "博导", "硕导",
+    "教师个人主页", "个人主页", "教师主页",
+    "教师", "导师", "名录",
 )
 # 「学校概况」这类二级入口，用于再找一层院系目录
 OVERVIEW_KEYS = (
@@ -351,7 +362,28 @@ def _expand_generic_entries(
 
 
 def _fetch(url: str, *, client=None, timeout: float = 20.0, js: bool = False) -> str:
-    """取网页。js=True 时用浏览器渲染（应对 JS 动态页），否则走普通请求。"""
+    """取网页。js=True 时用浏览器渲染（应对 JS 动态页），否则走普通请求。
+
+    部分高校站点 HTTPS 没配好（握手直接失败，实测浙大哲学学院就是这样），
+    这种情况自动换回 http 再试一次。
+    """
+    try:
+        return _fetch_once(url, client=client, timeout=timeout, js=js)
+    except PermissionError:
+        raise
+    except Exception:
+        if url.startswith("https://"):
+            try:
+                return _fetch_once(
+                    "http://" + url[len("https://"):],
+                    client=client, timeout=timeout, js=js,
+                )
+            except Exception:  # noqa: BLE001 - http 也不行就抛最初那个错
+                pass
+        raise
+
+
+def _fetch_once(url: str, *, client=None, timeout: float = 20.0, js: bool = False) -> str:
     if _FETCHER is not None:
         result = _FETCHER.fetch(url)
         if not result.ok:
@@ -363,6 +395,61 @@ def _fetch(url: str, *, client=None, timeout: float = 20.0, js: bool = False) ->
     if js or _JS_ENABLED:
         return fetch_html_rendered(url, timeout=max(timeout, 30.0))
     return fetch_html(url, client=client, timeout=timeout)
+
+
+# 学院站点常见的「引导页」：只有一张图和几个入口，真正首页在下一层
+_LANDING_PATH_HINTS = ("main.htm", "index.htm", "/home", "shouye", "zhuye", "default.htm")
+
+
+# 引导页里的静态资源，不是"下一层页面"
+_ASSET_SUFFIXES = (
+    ".css", ".js", ".json", ".png", ".jpg", ".jpeg", ".gif", ".svg", ".ico",
+    ".webp", ".pdf", ".zip", ".rar", ".doc", ".docx", ".xls", ".xlsx",
+    ".woff", ".woff2", ".ttf", ".eot", ".mp4", ".mp3",
+)
+
+
+def _unwrap_landing(
+    url: str, html: str, *, client=None, timeout: float = 20.0
+) -> tuple[str, str]:
+    """学院站点有时先给一个"引导页"，真正的首页在下一层，要跟进去。
+
+    实测浙大历史学院首页只有 1390 字节、一张背景图和两个入口，真正的站点在
+    ls.zju.edu.cn/main.htm；公共管理学院与光华法学院的入口则是 /spachinese、
+    /ghlscn 这种没有 .htm 的路径，锚文本还常常是空的（整段只有一个 <img> 或
+    干脆没有文字）。所以这里既认常见文件名，也接受"同域下第一个像网页的链接"。
+    """
+    text = html_to_text(html) or ""
+    if len(text) >= 300:
+        return url, html
+
+    host = urlparse(url).netloc
+    # 锚文本可能整段是 <img>，extract_links 会拿到空文字；这类情况直接扫原始 href
+    candidates = [link["href"] for link in extract_links(html, url)]
+    if len(candidates) < 8:
+        candidates += re.findall(r"""href=["']([^"']+)["']""", html)
+
+    same_host: list[str] = []
+    for href in candidates:
+        absolute = urljoin(url, href)
+        target = urlparse(absolute)
+        if target.netloc != host or not target.path or target.path == "/":
+            continue
+        if target.path.lower().endswith(_ASSET_SUFFIXES):
+            continue  # 样式表/图片之类，不是下一层页面
+        same_host.append(absolute)
+
+    # 先试文件名一眼就是首页的，再试任意同域子页
+    same_host.sort(key=lambda u: 0 if any(h in u.lower() for h in _LANDING_PATH_HINTS) else 1)
+    for target_url in same_host[:3]:
+        try:
+            page = _fetch_with_fallback(target_url, client=client, timeout=timeout)
+        except Exception:  # noqa: BLE001 - 进不去就试下一个
+            continue
+        if not (html_to_text(page) or "").strip():
+            continue
+        return target_url, page
+    return url, html
 
 
 def _fetch_with_fallback(url: str, *, client=None, timeout: float = 20.0) -> str:
@@ -418,6 +505,45 @@ def candidate_dir_urls(html: str, base: str) -> list[str]:
     return _dedupe(strong + weak)
 
 
+# 很多高校 CMS 把院系目录塞在页面里的 JS 数据块中，而不是 <a> 标签：
+#   _college = [ { title: '文学院', link: 'http://www.lit.zju.edu.cn/' }, ... ]
+# 这种情况下 extract_links 一个学院都拿不到（浙大就因此只识别出 5 个导航项）。
+_JS_TITLE_LINK_RE = re.compile(
+    r"title\s*:\s*['\"]([^'\"]{2,30})['\"]\s*,\s*"
+    r"(?:url\s*:\s*['\"][^'\"]*['\"]\s*,\s*)?"
+    r"link\s*:\s*['\"]([^'\"]{2,300})['\"]"
+)
+_JS_LINK_TITLE_RE = re.compile(
+    r"link\s*:\s*['\"]([^'\"]{2,300})['\"]\s*,\s*"
+    r"title\s*:\s*['\"]([^'\"]{2,30})['\"]"
+)
+_UNIT_WORD_KEYS = ("学院", "学部", "学系", "研究院", "研究中心", "实验室", "附属医院")
+
+
+def _js_unit_pairs(html: str, base: str) -> list[tuple[str, str]]:
+    """从页面里的 JS 数据块读出（学院名, 链接）——不少学校不把它们写成 <a> 标签。"""
+    pairs: list[tuple[str, str]] = []
+    for title, link in _JS_TITLE_LINK_RE.findall(html):
+        pairs.append((title, link))
+    for link, title in _JS_LINK_TITLE_RE.findall(html):
+        pairs.append((title, link))
+
+    out: list[tuple[str, str]] = []
+    seen: set[str] = set()
+    for title, link in pairs:
+        name = re.sub(r"\s+", "", title)
+        if not (2 <= len(name) <= 16) or name in seen:
+            continue
+        if not any(key in name for key in _UNIT_WORD_KEYS):
+            continue
+        href = link.strip()
+        if not href or href.startswith(("javascript:", "#", "mailto:")):
+            continue
+        seen.add(name)
+        out.append((name, urljoin(base, href)))
+    return out
+
+
 def _college_links(html: str, base: str) -> list[tuple[str, str]]:
     colleges: list[tuple[str, str]] = []
     seen: set[str] = set()
@@ -429,12 +555,18 @@ def _college_links(html: str, base: str) -> list[tuple[str, str]]:
         text = re.sub(r"\s+", "", link["text"])
         if not (2 <= len(text) <= 16):
             continue
-        if not any(key in text for key in ("学院", "学部", "学系", "研究院", "研究中心", "实验室")):
+        if not any(key in text for key in _UNIT_WORD_KEYS):
             continue
         if text in seen:
             continue
         seen.add(text)
         colleges.append((text, link["href"]))
+    # <a> 标签里没有的，再从 JS 数据块里补一份（两者同名时以 <a> 的为准）
+    for name, href in _js_unit_pairs(html, base):
+        if name in seen:
+            continue
+        seen.add(name)
+        colleges.append((name, href))
     return colleges
 
 
@@ -509,16 +641,30 @@ def _site_root(host: str) -> str:
 # 学院简介页上指向「学院自己的网站」的链接文字
 ENTER_KEYS = ("进入", "学院主页", "学院网站", "学院官网", "学院首页", "网站首页")
 
+# 学校共用的服务子域。学院自己的网站不会用这些名字，反过来，排除掉它们之后
+# 剩下的同校子域基本就是学院站。实测天津大学机械学院的简介页上，学院网站
+# http://me.tju.edu.cn/ 的锚文本是空的，靠"文字含进入/学院名"打分会被漏掉。
+_SERVICE_SUBDOMAINS = {
+    "www", "gs", "yjs", "yjsy", "grs", "yz", "yzb", "yzbm", "oaa", "jwc",
+    "lib", "library", "mail", "news", "en", "es", "fr", "ja", "ko", "de", "ru",
+    "vpn", "e", "xxgk", "xxgkw", "vr", "alumni", "xyh", "sie", "sdce", "faculty",
+    "hr", "nic", "job", "jobs", "career", "sso", "id", "portal", "my", "bbs",
+    "forum", "video", "tv", "cg", "zhaobiao", "kf", "hq", "gh", "tw",
+}
+
 
 def resolve_college_site(
     college: str, url: str, home: str, *, client=None, timeout: float = 20.0
 ) -> tuple[str, str]:
     """学院页若只是学校主站的简介页，找出学院自己的网站。
 
-    很多学校（如西安交大）的「院系设置」只链到主站的学院简介页，真正有师资队伍的
-    学院网站挂在另一台子域上（如 math.xjtu.edu.cn），简介页底部通常写着
-    「进入XX学院」。不跟进这一层，就会退回到学校总师资页，导致**每个学院都抓到
-    同一个页面**——实测西安交大 41 个学院里有 37 个就是这样变成 0 人的。
+    很多学校（如西安交大、天津大学）的「院系设置」只链到主站的学院简介页，真正有
+    师资队伍的学院网站挂在另一台子域上（如 math.xjtu.edu.cn、me.tju.edu.cn），
+    简介页上写着「进入XX学院」。不跟进这一层，就会退回到学校总师资页，导致**每个
+    学院都抓到同一个页面**——实测西安交大 41 个学院里有 37 个就是这样变成 0 人的。
+
+    选法：先看链接文字明确的（"进入XX学院"）；没有就**排除已知的学校服务子域**，
+    剩下的同校子域就是学院站。
 
     返回（学院网站, 该页 HTML）。
     """
@@ -526,30 +672,51 @@ def resolve_college_site(
     src_host = urlparse(url).netloc
     home_host = urlparse(home).netloc
     if not home_host or src_host != home_host:
-        return url, html  # 已经是学院自己的网站，不用再找
+        # 已经是学院自己的网站，但仍可能只是个"引导页"
+        return _unwrap_landing(url, html, client=client, timeout=timeout)
 
     root = _site_root(home_host)
-    best, best_score = "", 0
+    strong = ""   # 链接文字明确指向学院网站
+    strong_score = 0
+    fallback = ""  # 排除服务子域后剩下的第一个同校子域
     for link in extract_links(html, url):
-        host = urlparse(link["href"]).netloc
+        parsed = urlparse(link["href"])
+        host = parsed.netloc
         if not host or host == src_host or not host.endswith(root):
             continue
+        first_label = host.split(".")[0].lower()
         text = re.sub(r"\s+", "", link["text"])
         score = 0
         if any(key in text for key in ENTER_KEYS):
             score += 3
         if college and college[:3] in text:
             score += 2
-        if host.count(".") >= 3:  # 子域名比主站更像学院自己的站
-            score += 1
-        if score > best_score:
-            best, best_score = link["href"], score
-    if best and best_score >= 2:
+        if score > strong_score:
+            strong, strong_score = link["href"], score
+        if not fallback and first_label not in _SERVICE_SUBDOMAINS:
+            fallback = link["href"]
+
+    chosen = strong if strong_score >= 2 else fallback
+    if chosen:
         try:
-            return best, _fetch_with_fallback(best, client=client, timeout=timeout)
+            resolved = _fetch_with_fallback(chosen, client=client, timeout=timeout)
+            return _unwrap_landing(chosen, resolved, client=client, timeout=timeout)
         except Exception:  # noqa: BLE001 - 新站取不到就退回原页
             return url, html
     return url, html
+
+
+# 明显不是"师资队伍列表页"的地址：公众号文章、新闻详情页等。
+# 实测浙大国际教育学院的"师资"入口指向一篇微信公众号文章，抓回来只有 PermissionError。
+_JUNK_FACULTY_HOSTS = ("mp.weixin.qq.com", "weixin.qq.com", "zhihu.com", "baidu.com")
+_NEWS_DETAIL_RE = re.compile(r"/(?:info|news|content)/\d|/\d{4}/\d{4}/c\d+a\d+/page")
+
+
+def _is_junk_faculty_url(url: str) -> bool:
+    host = urlparse(url).netloc.lower()
+    if any(bad in host for bad in _JUNK_FACULTY_HOSTS):
+        return True
+    return bool(_NEWS_DETAIL_RE.search(urlparse(url).path))
 
 
 def find_faculty_page(
@@ -570,7 +737,10 @@ def find_faculty_page(
             html = _fetch_with_fallback(college_url, client=client, timeout=timeout)
         except Exception:  # noqa: BLE001 - 单个学院失败不影响整体
             return ""
-    links = extract_links(html, college_url)
+    links = [
+        link for link in extract_links(html, college_url)
+        if not _is_junk_faculty_url(link["href"])
+    ]
     for key in FACULTY_KEYS:
         for link in links:
             if key in link["text"]:

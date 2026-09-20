@@ -27,6 +27,11 @@ import time
 from collections import defaultdict
 from pathlib import Path
 
+# 控制台默认可能是 GBK，中文日志会乱码或直接报 UnicodeEncodeError；
+# 统一改成 UTF-8 输出，日志文件才能直接读。
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
 

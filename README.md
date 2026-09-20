@@ -88,29 +88,15 @@ LLM 决策 ──► 执行工具 ──► 结果回传 ──► 再决策
 
 | | |
 |---|---|
-| ![学生事实](screenshots/03-resume.png) | ![导师档案](screenshots/04-professor.png) |
-| ![论文核验](screenshots/05-papers.png) | ![研究档案](screenshots/06-history.png) |
+| ![首屏](screenshots/01-home.png) | ![学生事实](screenshots/03-resume.png) |
+| ![导师档案](screenshots/04-professor.png) | ![论文核验](screenshots/05-papers.png) |
+| ![研究档案](screenshots/06-history.png) | |
 
 > 截图里的导师、论文、学校**全部是虚构的演示数据**（`src/advisor_fit/demo_data.py` 生成），
 > 不涉及任何真实人物。想自己重新生成截图：先按下面「部署在线 Demo」里的方式用演示数据
 > 启动应用，再运行 `scripts\shoot_screenshots.py`。
 
 </details>
-
-### Agent 的每一步都看得见
-
-「Ⅲ 论文核验」页会把这次 Agent 运行**做了什么**摊开给你看：模型做了哪个决定、
-调用了哪个工具、每步耗时、成功还是失败、有没有触发资源上限。
-
-为什么要给你看这个：Agent 的"自主性"如果不可见，你只看得到结果，没法判断结论是
-**查出来的**还是**编出来的**。轨迹把"它做了什么"变成可核对的事实。参数与结果只留摘要，
-不会把整页网页内容塞进来。
-
-<p align="center">
-  <img src="screenshots/08-agent-trace.png" alt="Agent 运行轨迹" width="820">
-</p>
-
-<p align="center"><sub>本次 Agent 运行轨迹：工具调用、耗时、降级原因一目了然。</sub></p>
 
 ## 快速开始
 

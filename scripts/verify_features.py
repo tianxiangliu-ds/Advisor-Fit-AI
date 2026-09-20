@@ -355,10 +355,11 @@ def verify_roster() -> None:
 
     check(
         section,
-        "名册只保留三个字段",
-        "模型里没有 rate/description",
+        "导师表不含评价正文（评价单独存）",
+        "字段=学校/学院/姓名/备注/层次",
         f"字段={sorted(RosterEntry.model_fields)}",
-        set(RosterEntry.model_fields) == {"university", "department", "supervisor"},
+        set(RosterEntry.model_fields)
+        == {"university", "department", "supervisor", "note", "school_cate"},
     )
 
     db_path = settings.data_dir / "supervisor_roster.db"
@@ -368,12 +369,21 @@ def verify_roster() -> None:
 
     repo = RosterRepository(db_path)
     total = repo.count()
+    stats = repo.stats()
     check(
         section,
         "本地名册已导入",
-        "条数 > 1000",
-        f"{total} 条 / {len(repo.universities())} 所学校",
+        "导师数 > 1000",
+        f"{total} 位导师 / {len(repo.universities())} 所学校",
         total > 1000,
+    )
+
+    check(
+        section,
+        "学生评价单独保存、一条不丢",
+        "评价条数 > 导师数",
+        f"{stats['reviews']} 条评价（导师 {stats['advisors']} 位）",
+        stats["reviews"] > stats["advisors"],
     )
 
     names = repo.lookup("武汉大学", "信息管理学院")

@@ -1,4 +1,4 @@
-"""导师名册测试：只取学校/学院/姓名，评价与评分必须被丢弃。"""
+"""导师名册测试：导师去重不重不漏，括号备注单列，评价一条不丢。"""
 
 from __future__ import annotations
 
@@ -7,7 +7,9 @@ import json
 from advisor_fit.ingest.supervisor_roster import (
     RosterEntry,
     parse_roster,
+    parse_roster_payload,
     roster_summary,
+    split_note,
     top_universities,
 )
 from advisor_fit.storage.roster_repo import RosterRepository
@@ -19,105 +21,174 @@ _RAW = [
         "department": "信息管理学院",
         "supervisor": "陆伟",
         "rate": 4.8,
-        "description": "这段评价内容不应该被保留",
+        "desc": "一句话总结",
+        "description": "第一条评价正文",
     },
     {
+        "school_cate": "985",
         "university": "武汉大学",
         "department": "信息管理学院",
-        "supervisor": "马费成",
-        "rate": 5,
-        "description": "另一段评价",
+        "supervisor": "陆伟",
+        "rate": 5.0,
+        "desc": "",
+        "description": "第二条评价正文（同一导师的另一条评价）",
     },
     {
+        "school_cate": "985",
+        "university": "武汉大学",
+        "department": "前沿交叉学研究院",
+        "supervisor": "陆伟",
+        "rate": 3,
+        "desc": "",
+        "description": "同一人在另一个学院挂名，应各留一条",
+    },
+    {
+        "school_cate": "985",
         "university": "武汉大学",
         "department": "计算机学院",
-        "supervisor": "张三",
-        "rate": 3,
-        "description": "",
+        "supervisor": "周裕(深圳,千人计划)",
+        "rate": 2.5,
+        "desc": "",
+        "description": "带括号备注的姓名",
+    },
+    {
+        "school_cate": "985",
+        "university": "武汉大学",
+        "department": "计算机学院",
+        "supervisor": "Re: 郑荣濠",
+        "rate": None,
+        "desc": "",
+        "description": "带标题前缀的姓名",
     },
 ]
 
 
-# -- 解析 ---------------------------------------------------------------------
+# -- 姓名与备注拆分 -----------------------------------------------------------
 
 
-def test_parse_keeps_only_three_columns():
+def test_split_note_separates_parenthetical_remark():
+    assert split_note("周裕(深圳,千人计划)") == ("周裕", "深圳,千人计划")
+    assert split_note("金小刚(AI)") == ("金小刚", "AI")
+    assert split_note("陆伟") == ("陆伟", "")
+
+
+def test_split_note_strips_reply_prefix():
+    assert split_note("Re: 郑荣濠") == ("郑荣濠", "")
+
+
+# -- 名册：去重但不漏 ---------------------------------------------------------
+
+
+def test_entries_are_deduplicated_per_department():
     entries = parse_roster(_RAW)
 
-    assert len(entries) == 3
-    first = entries[0]
-    assert first.university == "武汉大学"
-    assert first.department == "信息管理学院"
-    assert first.supervisor == "陆伟"
-    # 评价与评分不得出现在模型里
-    dumped = first.model_dump()
-    assert set(dumped) == {"university", "department", "supervisor"}
-    assert "评价" not in json.dumps(dumped, ensure_ascii=False)
+    # 陆伟在信管院只出现一次、在交叉院各一条；两人计算机学院；共 4 条
+    assert len(entries) == 4
+    keys = {(e.university, e.department, e.supervisor) for e in entries}
+    assert len(keys) == 4
 
 
-def test_parse_accepts_a_wrapped_payload():
-    entries = parse_roster({"data": _RAW})
+def test_same_person_in_two_departments_keeps_both_rows():
+    entries = parse_roster(_RAW)
+    luwei = [e for e in entries if e.supervisor == "陆伟"]
 
-    assert len(entries) == 3
-
-
-def test_parse_accepts_a_json_string():
-    entries = parse_roster(json.dumps(_RAW, ensure_ascii=False))
-
-    assert entries[0].supervisor == "陆伟"
+    assert {e.department for e in luwei} == {"信息管理学院", "前沿交叉学研究院"}
 
 
-def test_parse_skips_entries_without_required_columns():
-    entries = parse_roster(
-        [
-            {"university": "武汉大学", "supervisor": "陆伟"},
-            {"university": "", "supervisor": "无学校"},
-            {"university": "武汉大学", "supervisor": ""},
-            "不是字典",
-        ]
-    )
+def test_note_is_stored_separately_from_the_name():
+    entries = parse_roster(_RAW)
+    zhou = next(e for e in entries if e.department == "计算机学院" and "周" in e.supervisor)
+
+    assert zhou.supervisor == "周裕"
+    assert zhou.note == "深圳,千人计划"
+
+
+def test_school_category_is_kept():
+    entries = parse_roster(_RAW)
+
+    assert {e.school_cate for e in entries} == {"985"}
+
+
+def test_parse_accepts_wrapped_payload_and_json_string():
+    assert len(parse_roster({"data": _RAW})) == 4
+    assert parse_roster(json.dumps(_RAW, ensure_ascii=False))[0].university == "武汉大学"
+
+
+def test_parse_skips_rows_without_required_columns():
+    entries = parse_roster([{"university": "武汉大学", "supervisor": "陆伟"}, {"university": ""}])
 
     assert len(entries) == 1
 
 
-def test_parse_deduplicates():
-    entries = parse_roster(_RAW + _RAW)
-
-    assert len(entries) == 3
-
-
-def test_parse_broken_json_returns_empty_list():
+def test_parse_broken_json_returns_empty():
     assert parse_roster("{ 这不是合法 json") == []
+
+
+# -- 评价：一条不丢 -----------------------------------------------------------
+
+
+def test_reviews_keep_every_entry_for_the_same_advisor():
+    payload = parse_roster_payload(_RAW)
+    luwei_reviews = [r for r in payload.reviews if r.supervisor == "陆伟"]
+
+    assert len(luwei_reviews) == 3
+    details = {r.detail for r in luwei_reviews}
+    assert "第一条评价正文" in details
+    assert "第二条评价正文（同一导师的另一条评价）" in details
+
+
+def test_review_keeps_rate_summary_and_detail():
+    payload = parse_roster_payload(_RAW)
+    first = payload.reviews[0]
+
+    assert first.rate == 4.8
+    assert first.summary == "一句话总结"
+    assert first.detail == "第一条评价正文"
+
+
+def test_entries_and_reviews_have_different_counts():
+    payload = parse_roster_payload(_RAW)
+
+    assert len(payload.entries) == 4
+    assert len(payload.reviews) == 5
 
 
 # -- 统计 ---------------------------------------------------------------------
 
 
 def test_summary_counts_universities_and_departments():
-    summary = roster_summary(parse_roster(_RAW))
-
-    assert summary == {"entries": 3, "universities": 1, "departments": 2}
+    assert roster_summary(parse_roster(_RAW)) == {
+        "entries": 4,
+        "universities": 1,
+        "departments": 3,
+    }
 
 
 def test_top_universities_sorted_by_count():
-    assert top_universities(parse_roster(_RAW), 5) == [("武汉大学", 3)]
+    assert top_universities(parse_roster(_RAW), 5) == [("武汉大学", 4)]
 
 
-# -- 本地存储 -----------------------------------------------------------------
+# -- 本地数据库 ---------------------------------------------------------------
 
 
 def _repo(tmp_path) -> RosterRepository:
     repo = RosterRepository(tmp_path / "roster.db")
-    repo.replace_all(parse_roster(_RAW))
+    repo.import_community(parse_roster_payload(_RAW))
     return repo
+
+
+def test_repo_stores_advisors_and_reviews(tmp_path):
+    repo = _repo(tmp_path)
+
+    assert repo.count() == 4
+    assert repo.review_count() == 5
 
 
 def test_repo_lookup_by_university_and_department(tmp_path):
     repo = _repo(tmp_path)
 
-    # 中文排序按字节序，不用断言顺序，只断言内容
-    assert set(repo.lookup("武汉大学", "信息管理学院")) == {"陆伟", "马费成"}
-    assert set(repo.lookup("武汉大学")) == {"陆伟", "马费成", "张三"}
+    assert set(repo.lookup("武汉大学", "信息管理学院")) == {"陆伟"}
+    assert set(repo.lookup("武汉大学")) == {"陆伟", "周裕", "郑荣濠"}
     assert repo.lookup("不存在大学") == []
 
 
@@ -125,25 +196,68 @@ def test_repo_lists_universities_and_departments(tmp_path):
     repo = _repo(tmp_path)
 
     assert repo.universities() == ["武汉大学"]
-    assert set(repo.departments("武汉大学")) == {"信息管理学院", "计算机学院"}
+    assert set(repo.departments("武汉大学")) == {
+        "信息管理学院",
+        "前沿交叉学研究院",
+        "计算机学院",
+    }
 
 
-def test_repo_replace_all_is_idempotent(tmp_path):
+def test_repo_returns_reviews_for_one_advisor(tmp_path):
     repo = _repo(tmp_path)
-    before = repo.count()
+    reviews = repo.reviews_for("武汉大学", "陆伟")
 
-    repo.replace_all(parse_roster(_RAW))
-
-    assert repo.count() == before
-
-
-def test_repo_is_empty_before_import(tmp_path):
-    repo = RosterRepository(tmp_path / "empty.db")
-
-    assert repo.count() == 0
-    assert repo.universities() == []
-    assert repo.lookup("武汉大学") == []
+    assert len(reviews) == 3
+    assert all(item.supervisor == "陆伟" for item in reviews)
 
 
-def test_entry_model_defaults_department_to_empty_string():
-    assert RosterEntry(university="武汉大学", supervisor="陆伟").department == ""
+def test_repo_entries_carry_note_and_school_category(tmp_path):
+    repo = _repo(tmp_path)
+    entries = repo.entries("武汉大学", "计算机学院")
+    zhou = next(e for e in entries if e.supervisor == "周裕")
+
+    assert zhou.note == "深圳,千人计划"
+    assert zhou.school_cate == "985"
+
+
+def test_official_import_does_not_wipe_community_data(tmp_path):
+    repo = _repo(tmp_path)
+
+    repo.upsert_official(
+        [RosterEntry(university="武汉大学", department="信息管理学院", supervisor="新导师")],
+        source_url="https://example.com/list",
+    )
+
+    stats = repo.stats()
+    assert stats["advisors"] == 5
+    assert stats["from_community"] == 4
+    assert stats["from_official"] == 1
+    assert repo.review_count() == 5, "官网导入不应清掉社区评价"
+
+
+def test_community_and_official_can_overlap(tmp_path):
+    repo = _repo(tmp_path)
+
+    repo.upsert_official(
+        [RosterEntry(university="武汉大学", department="信息管理学院", supervisor="陆伟")]
+    )
+
+    stats = repo.stats()
+    assert stats["advisors"] == 4, "同一个人不应产生第二行"
+    assert stats["from_both"] == 1
+
+
+def test_reimporting_community_is_idempotent(tmp_path):
+    repo = _repo(tmp_path)
+    repo.import_community(parse_roster_payload(_RAW))
+
+    assert repo.count() == 4
+    assert repo.review_count() == 5
+
+
+def test_entry_model_defaults():
+    entry = RosterEntry(university="武汉大学", supervisor="陆伟")
+
+    assert entry.department == ""
+    assert entry.note == ""
+    assert entry.school_cate == ""

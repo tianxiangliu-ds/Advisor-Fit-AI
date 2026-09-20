@@ -92,6 +92,28 @@ Harness 就是干这个的：**给模型自由，同时把自由关在笼子里�
 
 把表层重合说成"语义理解"是夸大，而夸大恰好是这个项目最该避免的事。
 
+**怎么接上真语义**：在 `.env` 里填三行，然后在「方向找导师」页检索一次，
+措辞会自动从「字面相近」变成「语义相近」。
+
+```dotenv
+EMBEDDING_BASE_URL=https://api.siliconflow.cn/v1   # 换成你用的服务
+EMBEDDING_MODEL=BAAI/bge-m3
+EMBEDDING_API_KEY=sk-xxxx
+```
+
+任何提供 **OpenAI 兼容 `/embeddings`** 的服务都能用（硅基流动、智谱、阿里百炼、
+百度千帆、OpenAI 等）。**DeepSeek 目前不提供 embedding 接口**，它的 Key 配这里不生效。
+
+配好之后先跑自检，确认接口真的接通、而且模型确实能分辨语义：
+
+```powershell
+.\.venv\Scripts\python.exe scripts\check_embedding.py
+```
+
+它会报出当前后端、真的调一次接口，并用三组对照句量出「相关 vs 无关」的区分度。
+这一步不能省——**很多接口能返回向量，但模型选错（比如用了非中文模型）就没有区分度，
+接上去等于没用**，而那种情况下界面上看不出任何异常。
+
 两条召回路径，优先级明确：
 
 1. 关键词**命中**的前提下，向量也近 → 补一条理由让排序略微靠前；

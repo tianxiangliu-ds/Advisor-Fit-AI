@@ -131,13 +131,16 @@ class HashingEmbedder:
 class ApiEmbedder:
     """调 OpenAI 兼容的 `/embeddings` 接口。
 
-    DeepSeek 目前不提供 embedding 接口，所以这条路的地址与模型名都要显式配置；
-    配不上就退回默认档，而不是让主流程失败。
+    大多数国内厂商（硅基流动、智谱、阿里百炼、百度千帆等）都提供 OpenAI 兼容的
+    embedding 接口，填 `base_url` + `model` + `api_key` 即可。
+    注意 **DeepSeek 目前不提供 embedding 接口**，拿 DeepSeek 的 Key 配这里不会生效。
     """
 
     client: Any
     model: str
     base_url: str
+    api_key: str = ""
+    timeout: float = 30.0
     _dim: int = 0
 
     @property
@@ -161,10 +164,16 @@ class ApiEmbedder:
     def recall_threshold(self) -> float:
         return 0.60
 
+    def _headers(self) -> dict[str, str]:
+        # Key 按请求带，**不去改共享 client 的 headers**——那会污染别的请求
+        return {"Authorization": f"Bearer {self.api_key}"} if self.api_key else {}
+
     def embed(self, texts: Sequence[str]) -> list[list[float]]:
         response = self.client.post(
             f"{self.base_url.rstrip('/')}/embeddings",
             json={"model": self.model, "input": list(texts)},
+            headers=self._headers(),
+            timeout=self.timeout,
         )
         response.raise_for_status()
         payload = response.json()
@@ -217,13 +226,17 @@ def build_embedder(*, client: Any = None, settings_obj: Any = None) -> Embedder:
     base_url = str(getattr(settings_obj, "embedding_base_url", "") or "").strip()
     model = str(getattr(settings_obj, "embedding_model", "") or "").strip()
     api_key = str(getattr(settings_obj, "embedding_api_key", "") or "").strip()
-    if base_url and model and client is not None:
-        headers = {"Authorization": f"Bearer {api_key}"} if api_key else {}
-        try:
-            client.headers.update(headers)
-        except Exception:  # noqa: BLE001 - 加不上头也不该拦住主流程
-            pass
-        return ApiEmbedder(client=client, model=model, base_url=base_url)
+    if base_url and model:
+        if client is None:
+            try:
+                import httpx  # noqa: PLC0415
+
+                client = httpx.Client(timeout=30.0)
+            except Exception:  # noqa: BLE001 - 连 httpx 都没有就退回离线档
+                return HashingEmbedder()
+        return ApiEmbedder(
+            client=client, model=model, base_url=base_url, api_key=api_key
+        )
 
     local_name = str(getattr(settings_obj, "embedding_local_model", "") or "").strip()
     if local_name:

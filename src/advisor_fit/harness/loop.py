@@ -191,11 +191,19 @@ def run_loop(
             if not isinstance(decision, AgentDecision):
                 steps.append({"error": "LLM 输出无效"})
                 break
-            if decision.action == "done":
+
+            # 容错：模型有时把**工具名直接写进 action**，而不是 action="tool" + tool="名字"。
+            # 实测 DeepSeek 会这样（轨迹里表现为"未知动作: check_paper_affiliations"，
+            # 白白浪费一步）。只要这个名字确实是已注册的工具，就当成一次工具调用。
+            action, tool_name = decision.action, decision.tool
+            if action not in ("tool", "confirm", "done") and registry.get(action) is not None:
+                action, tool_name = "tool", action
+
+            if action == "done":
                 trace.add(kind="done", name="done", summary=decision.message)
                 steps.append({"done": decision.message})
                 return steps
-            if decision.action == "confirm":
+            if action == "confirm":
                 if decision.message in granted:
                     trace.add(kind="confirmation", name="granted", summary=decision.message)
                     steps.append({"confirmed": decision.message})
@@ -203,9 +211,10 @@ def run_loop(
                 trace.add(kind="confirmation", name="requested", summary=decision.message)
                 steps.append({"needs_confirmation": decision.message})
                 return steps
-            if decision.action == "tool":
+            if action == "tool":
                 steps.append(_run_tool_step(
-                    decision, registry, trace, tool_calls, executor, budget, external_tools
+                    decision, tool_name, registry, trace, tool_calls, executor,
+                    budget, external_tools,
                 ))
                 continue
             steps.append({"error": f"未知动作: {decision.action}"})
@@ -221,6 +230,7 @@ def run_loop(
 
 def _run_tool_step(
     decision: AgentDecision,
+    tool_name: str | None,
     registry: ToolRegistry,
     trace: RunTrace,
     tool_calls: Counter[str],
@@ -229,15 +239,15 @@ def _run_tool_step(
     external_tools: set[str],
 ) -> dict:
     """执行一步工具调用，并把该记的都记上。返回追加到 steps 的那条记录。"""
-    entry = registry.get(decision.tool or "")
+    entry = registry.get(tool_name or "")
     if entry is None:
         trace.add(
             kind="error",
-            name=decision.tool or "",
+            name=tool_name or "",
             status="error",
-            error=f"未知工具: {decision.tool}",
+            error=f"未知工具: {tool_name}",
         )
-        return {"error": f"未知工具: {decision.tool}"}
+        return {"error": f"未知工具: {tool_name}"}
 
     spec, fn = entry
     args_digest = digest_args(decision.args)
@@ -249,7 +259,7 @@ def _run_tool_step(
             kind="tool_call", name=spec.name, args_digest=args_digest,
             status="skipped", error=message,
         )
-        return {"tool": decision.tool, "args": decision.args, "result": {"error": message}}
+        return {"tool": tool_name, "args": decision.args, "result": {"error": message}}
 
     tool_calls[spec.name] += 1
     result, status, error, attempts, duration = _execute_tool(
@@ -268,4 +278,4 @@ def _run_tool_step(
         summary=summary,
         error=error,
     )
-    return {"tool": decision.tool, "args": decision.args, "result": result}
+    return {"tool": tool_name, "args": decision.args, "result": result}

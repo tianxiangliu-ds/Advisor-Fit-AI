@@ -16,7 +16,6 @@ import streamlit as st
 from pydantic import ValidationError
 
 from advisor_fit import __version__, ui_trace
-from advisor_fit.agents.research import research_professor
 from advisor_fit.analysis.direction_search import (
     completeness_text,
     rank_candidates,
@@ -25,8 +24,6 @@ from advisor_fit.analysis.direction_search import (
 from advisor_fit.analysis.identity import STATUS_LABELS, assess_identity
 from advisor_fit.config import settings
 from advisor_fit.export.report import export_docx, export_json, export_markdown
-from advisor_fit.harness.budget import BudgetTracker
-from advisor_fit.harness.trace import RunTrace
 from advisor_fit.ingest.cv import (
     apply_fact_edits,
     build_student_profile,
@@ -46,7 +43,7 @@ from advisor_fit.ingest.profile_fallback import REQUIRED_FIELDS, build_field_rep
 from advisor_fit.llm.provider import NullLLM, build_llm
 from advisor_fit.manual_pipeline import run_manual_pipeline
 from advisor_fit.providers.disciplines import DISCIPLINE_LABELS
-from advisor_fit.providers.router import SearchRouter
+from advisor_fit.services.research import ResearchRequest, run_research
 from advisor_fit.storage.advisor_repo import AdvisorRepository
 from advisor_fit.storage.backup import (
     build_backup_bytes,
@@ -223,79 +220,49 @@ def _run_research(
     known_directions: list[str] | None = None,
     discipline: str = "",
 ) -> None:
-    """用导师研究 Agent 检索并消歧，结果与确认门控写入 session_state。"""
-    budget = BudgetTracker()
-    provider = SearchRouter(
-        key_values={
-            "wanfang_app_key": settings.wanfang_app_key,
-            "aminer_api_key": settings.aminer_api_key,
-        },
-        budget=budget,
-        contact_email=settings.contact_email,
-    )
-    source = mode if mode in ("zh", "en") else "auto"
-    trace = RunTrace(task=f"检索导师「{name}」的候选论文")
-    result = research_professor(
-        _llm(),
-        provider,
-        name=name,
-        institution=institution or None,
-        english_name=english_name or None,
-        source=source,
-        discipline=discipline or None,
-        search_institution=search_institution or None,
-        seed_titles=seed_titles or None,
-        known_directions=known_directions or None,
+    """用导师研究 Agent 检索并消歧，结果与确认门控写入 session_state。
+
+    真正的编排在 `advisor_fit.services.research`——同一套流程也被 HTTP 接口复用，
+    页面这边只负责"把结果放进会话、并在界面上呈现"。这样换个前端就不必重写一遍。
+    """
+    outcome = run_research(
+        ResearchRequest(
+            name=name,
+            institution=institution,
+            english_name=english_name,
+            source=mode,
+            discipline=discipline,
+            seed_titles=list(seed_titles or []),
+            known_directions=list(known_directions or []),
+        ),
+        llm=_llm(),
         resume_steps=st.session_state.get("_research_steps"),
         granted_confirmations=st.session_state.get("_research_granted", []),
-        budget=budget,
-        trace=trace,
     )
-    st.session_state["_research_degraded"] = trace.degraded_reason
-    st.session_state["_research_sources"] = provider.describe()
-    st.session_state["_research_health"] = _research_health(provider)
-    st.session_state["_research_discipline"] = provider.discipline_text()
+
+    st.session_state["_research_degraded"] = outcome.degraded_reason
+    st.session_state["_research_sources"] = outcome.sources
+    st.session_state["_research_health"] = outcome.health
+    st.session_state["_research_discipline"] = outcome.discipline
     # 轨迹留在会话里，供「论文核验」页的 Agent 运行轨迹区展示
-    st.session_state["_agent_trace"] = trace.to_dict()
+    st.session_state["_agent_trace"] = outcome.trace
+
     run_id = st.session_state.get("run_id")
     if run_id:
         try:
             # 轨迹落库失败不得影响检索结果
-            st.session_state.repo.save_trace(run_id, trace)
+            st.session_state.repo.save_trace(run_id, outcome.trace)
         except Exception:  # noqa: BLE001
             pass
-    if result.needs_confirmation:
-        st.session_state["_research_confirm"] = result.needs_confirmation
-        st.session_state["_research_steps"] = result.log
-        st.session_state.candidate_papers = result.papers
+
+    if outcome.needs_confirmation:
+        st.session_state["_research_confirm"] = outcome.needs_confirmation
+        st.session_state["_research_steps"] = outcome.steps
     else:
         st.session_state.pop("_research_confirm", None)
         st.session_state["_research_steps"] = None
         st.session_state["_research_granted"] = []
-        st.session_state.candidate_papers = result.papers
-
-
-def _research_health(provider) -> dict | None:
-    """记录这次检索的"来源健康度"，用来区分"没查成"和"查了但没有"。
-
-    这两件事对用户的意义完全不同：
-    - 所有来源都失败 → 是系统这边的问题，应当重试或换来源，**不能让人以为这位导师没有论文**；
-    - 来源正常返回但没有结果 → 多半是姓名/机构对不上，应当换关键词或手动补录。
-
-    只留计数和前几个失败来源的名字，不把整份来源明细塞进会话。
-    """
-    try:
-        outcomes = list(provider.outcome().outcomes)
-    except Exception:  # noqa: BLE001 - 取不到健康度不影响检索结果
-        return None
-    searched = [item for item in outcomes if item.searched]
-    failed = [item for item in outcomes if item.status in ("blocked", "error")]
-    return {
-        "total": len(outcomes),
-        "searched": len(searched),
-        "failed": len(failed),
-        "failed_labels": [item.label for item in failed][:3],
-    }
+    st.session_state.candidate_papers = outcome.papers
 
 
 def _render_empty_result_guidance() -> None:

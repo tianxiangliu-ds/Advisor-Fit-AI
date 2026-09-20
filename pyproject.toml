@@ -25,6 +25,12 @@ pdf = [
 crawl = [
     "playwright>=1.45",
 ]
+# HTTP 服务层。Harness 本身与界面无关，Streamlit 只是其中一种前端；
+# 装了这个分组就能把同一套 Agent 能力用 FastAPI 对外暴露成接口。
+api = [
+    "fastapi>=0.115",
+    "uvicorn>=0.30",
+]
 
 [build-system]
 requires = ["hatchling"]

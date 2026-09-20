@@ -247,3 +247,53 @@ def test_fast_tool_is_unaffected_by_the_timeout_wrapper():
     steps = run_loop(_one_call(tool="quick"), registry=registry, max_steps=2)
 
     assert any(step.get("result", {}).get("count") == 7 for step in steps)
+
+
+# -- 模型输出的容错 ------------------------------------------------------------
+
+
+def test_tool_name_written_into_action_is_tolerated():
+    """实测 DeepSeek 会把工具名直接写进 action，而不是 action="tool" + tool="名字"。
+
+    真实调用里这表现为轨迹里多出一条「未知动作: check_paper_affiliations」，
+    白白浪费一步（而这一步是花了 token 的）。只要名字确实是已注册的工具，
+    就应当按工具调用处理。
+    """
+    calls = []
+
+    registry = _registry(
+        ToolSpec(name="search_by_author", description="检索"),
+        lambda name: calls.append(name) or {"count": 1},
+    )
+    llm = FakeLLM([
+        AgentDecision(action="search_by_author", args={"name": "陆伟"}),  # 少了 action="tool"
+        AgentDecision(action="done", message="结束"),
+    ])
+    trace = RunTrace(task="t")
+
+    steps = run_loop(llm, registry=registry, trace=trace, max_steps=2)
+
+    assert calls == ["陆伟"], "应当当成一次正常的工具调用"
+    assert any(step.get("tool") == "search_by_author" for step in steps)
+    assert not [s for s in trace.steps if s.kind == "error"], "不该产生错误轨迹"
+
+
+def test_unknown_action_still_errors():
+    """容错只针对"确实是已注册工具"的名字；真未知的动作仍要如实报错。"""
+    registry = _registry(ToolSpec(name="search", description="检索"), lambda **_: {})
+
+    # max_steps=1：未知动作不会中断循环，会再问一次模型；这里只喂一个决策
+    steps = run_loop(FakeLLM([AgentDecision(action="乱写")]), registry=registry, max_steps=1)
+
+    assert any("未知动作" in str(step.get("error", "")) for step in steps)
+
+
+def test_confirm_and_done_are_not_mistaken_for_tools():
+    """工具名容错不能吃掉 confirm / done 这两个控制动作。"""
+    registry = _registry(ToolSpec(name="search", description="检索"), lambda **_: {})
+
+    steps = run_loop(
+        FakeLLM([AgentDecision(action="done", message="结束")]), registry=registry, max_steps=2
+    )
+
+    assert steps[-1] == {"done": "结束"}

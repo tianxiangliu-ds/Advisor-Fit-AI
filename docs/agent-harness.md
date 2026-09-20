@@ -39,15 +39,50 @@ Harness 就是干这个的：**给模型自由，同时把自由关在笼子里�
 | **Model**（模型层） | `llm/provider.py` | 多供应商可切：DeepSeek / OpenAI / Anthropic / Ollama；统一结构化输出；不可用时降级 | ✅ |
 | **Prompt**（提示词） | `llm/prompts.py` | 提示词登记表，带版本号；10 条提示词集中管理，不在业务代码里散落 | ✅ |
 | **Tool**（工具层） | `harness/tools.py`、`agents/tools.py` | 工具契约与注册表；声明与实现分离；装配时校验一一对应 | ✅ |
-| **Loop**（循环层） | `harness/loop.py` | LLM 决策 → 执行工具 → 结果回传，直到结束 / 请求确认 / 预算耗尽 | ✅ |
+| **Loop**（循环层） | `harness/loop.py` | LLM 决策 → 执行工具 → 结果回传，直到结束 / 请求确认 / 预算耗尽；**按契约执行限流、超时、重试** | ✅ |
 | **Budget**（预算闸门） | `harness/budget.py` | 按维度记账（步数/token/外部请求/单来源/墙钟），超限优雅降级而非抛错 | ✅ |
 | **Trace**（轨迹） | `harness/trace.py` | 每一步都可追溯：调了什么、参数摘要、耗时、成功失败、这次给了哪些工具 | ✅ |
+| **Service**（服务层） | `services/research.py` | 「跑一次导师研究」的编排；**不依赖 Streamlit 也不依赖 FastAPI**，前端可换 | ✅ |
+| **API**（HTTP 层） | `api/app.py` | FastAPI 接口：`/health`、`/tools`、`/research`；只负责把 HTTP 请求翻译成一次服务调用 | ✅ |
 | **Context**（上下文） | — | 上下文窗口的显式组装与裁剪策略 | ⚠️ 目前隐式（由各调用点拼 payload） |
 | **State**（状态） | — | 跨轮/跨会话的运行状态机 | ⚠️ 目前靠 Streamlit session + SQLite artifacts |
 | **Workflow**（工作流） | — | 显式的工作流定义（阶段、门控、回退） | ⚠️ 目前写在 `agents/research.py` 的控制流里 |
 
 > 最后三行是**诚实的缺口**，不是已完成项。现在的抽象程度够支撑当前任务，
 > 但离"可复用、可声明式编排的 Workflow"还有距离。这是下一阶段的主要工作。
+
+### 为什么把 Service 和 API 分成两层
+
+`services/research.py` 是"跑一次导师研究"这件事本身；`api/app.py` 只是它的一个
+**调用方**。分开的直接好处是可检验：导入服务层**不会**拉起 FastAPI 或 Streamlit
+（有测试盯着这一点），所以同一套能力能给 Streamlit 页面、HTTP 接口、命令行与
+评测脚本共用，换前端不必重写流程。
+
+```
+Streamlit 页面 ─┐
+HTTP 接口     ─┼─► services.run_research ─► agents.research ─► harness.loop ─► tools
+命令行 / 评测  ─┘
+```
+
+**HTTP 接口**（需要 `pip install -e ".[api]"` 或 `uv sync --group api`）：
+
+```powershell
+.\.venv\Scripts\python.exe -m uvicorn "advisor_fit.api:create_app" --factory --port 8000
+```
+
+| 端点 | 作用 |
+|---|---|
+| `GET /health` | 存活与配置状态：版本、是否配了大模型、当前是 agent 还是 rule 模式 |
+| `GET /tools` | **工具契约**：Agent 手里有哪些工具、参数 schema、权限与限流 |
+| `POST /research` | 跑一次导师研究，返回候选论文 + 运行轨迹 + 来源说明 |
+| `GET /docs` | 自动生成的 OpenAPI 文档 |
+
+`POST /research` 的两个约定值得单说：
+
+- **一个来源都没查成时返回 503**，而不是 200 + 空列表。空列表会被调用方读成
+  "这位导师没有论文"——那是把一个检索问题当成了关于人的事实。
+- **需要人工确认时返回 `needs_confirmation`**，同时带回已产生的步骤；调用方带上
+  这些步骤与用户答复再调一次即可续跑，而不是从头再来。
 
 ---
 
@@ -266,8 +301,8 @@ Harness 就是干这个的：**给模型自由，同时把自由关在笼子里�
    `agents/research.py` 的控制流和 Streamlit session 里。
 2. **没有语义召回**：匹配靠可解释的关键词/同义词规则 + LLM 推理，
    embedding 语义召回尚未接入。
-3. **没有 HTTP 服务层**：目前只有 Streamlit 前端，Harness 本身与界面无关，
-   抽一层 FastAPI 是自然的下一步。
+3. ~~没有 HTTP 服务层~~ → 已完成（`api/app.py`）。服务层与接口层分开，导入服务层
+   不会拉起任何 Web 框架。
 4. **评测还不成体系**：有两个金标集，但缺"一键跑全指标 + 看板"。
 
 这三件事是通往"可复用 Agent Harness"的主要距离，也是下一阶段的重点。

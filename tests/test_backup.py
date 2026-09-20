@@ -40,6 +40,19 @@ def test_default_backup_excludes_secrets_and_uploads(tmp_path):
     assert any("大库" in item for item in skipped)
 
 
+def test_backup_can_follow_a_custom_data_dir(tmp_path):
+    """线上 Demo 会把数据放到别处，备份要跟着实际数据目录走。"""
+    custom = tmp_path / "srv" / "demo-data"
+    custom.mkdir(parents=True)
+    (custom / "app.db").write_bytes(b"demo-db")
+
+    entries, missing, _ = collect_entries(tmp_path, data_dir=custom)
+
+    assert [entry.arcname for entry in entries] == ["data/app.db"]
+    assert entries[0].path == custom / "app.db"
+    assert "page_cache.db" in missing
+
+
 def test_optional_flags_pull_in_the_rest(tmp_path):
     _make_tree(tmp_path)
     entries, _, skipped = collect_entries(

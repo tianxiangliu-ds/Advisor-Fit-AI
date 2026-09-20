@@ -50,9 +50,15 @@ def settle(page, seconds: float = 2.2) -> None:
 
 
 def click_sidebar(page, label: str) -> bool:
-    button = page.get_by_role("button", name=label, exact=False).first
+    """点侧栏导航按钮。
+
+    用 `data-testid="stSidebar"` 限定在侧栏里找，并且每页都从干净状态重新加载后再点，
+    避免上一页的交互（例如下拉框）留下状态导致点击失效。
+    """
+    sidebar = page.get_by_test_id("stSidebar")
+    button = sidebar.get_by_role("button").filter(has_text=label).first
     try:
-        button.click(timeout=8000)
+        button.click(timeout=10000)
         return True
     except Exception as exc:  # noqa: BLE001 - 某一页点不动不该中断整轮截图
         print(f"  [警告] 点不动「{label}」：{exc}")
@@ -66,14 +72,77 @@ def fill_direction_search(page) -> None:
     box.fill("知识图谱、数字人文")
     page.get_by_role("button", name="找候选导师", exact=False).first.click()
     settle(page, 3.5)
-    combo = page.locator('[data-testid="stMultiSelect"]').nth(1)
-    combo.click()
-    time.sleep(0.8)
-    for option in page.locator('[role="option"]').all()[:2]:
-        option.click()
-        time.sleep(0.4)
+
+    # 勾选前两位候选，让「并排比较」出现在页面上。
+    # 注意：Streamlit 的下拉标签不在 stMultiSelect 容器内部，所以按序号取（第 2 个下拉框）。
+    picker = page.locator('[data-testid="stMultiSelect"]').nth(1)
+    picker.click()
+    settle(page, 1.2)
+    opened = page.locator('[role="option"]')
+    for index in range(min(2, opened.count())):
+        opened.nth(index).click()
+        time.sleep(0.5)
     page.keyboard.press("Escape")
     settle(page, 2.5)
+
+
+def fill_professor_form(page) -> None:
+    """把导师档案页的必填字段填上，截图才看得出这一页长什么样。"""
+    values = {
+        "导师姓名（必填）": "示例导师",
+        "学校/单位（必填）": "示例大学",
+        "院系（可选）": "信息管理学院",
+        "职称（可选）": "教授",
+    }
+    for label, value in values.items():
+        container = page.locator('[data-testid="stTextInput"]').filter(has_text=label).first
+        try:
+            container.locator("input").fill(value, timeout=5000)
+        except Exception as exc:  # noqa: BLE001
+            print(f"  [警告] 填不了「{label}」：{exc}")
+    interests = (
+        page.locator('[data-testid="stTextArea"]').filter(has_text="官网公开研究方向").first
+    )
+    try:
+        interests.locator("textarea").fill("知识图谱；数字人文；文化遗产数字化", timeout=5000)
+    except Exception as exc:  # noqa: BLE001
+        print(f"  [警告] 填不了研究方向：{exc}")
+    settle(page, 2.0)
+
+
+def open_first_history_record(page) -> bool:
+    """在「研究档案」页点开第一条记录，截到研究匹配简报。
+
+    记录按钮的文字形如「示例导师 · 示例大学」，用中点做特征来定位，
+    避免依赖 Streamlit 内部的主区域容器名。
+    """
+    button = page.locator('button:has-text("·")').first
+    try:
+        button.click(timeout=8000)
+        settle(page, 3.0)
+        return True
+    except Exception as exc:  # noqa: BLE001
+        print(f"  [警告] 打不开历史记录：{exc}")
+        return False
+
+
+def shoot_agent_trace(page, out_dir: Path) -> bool:
+    """单独把「Agent 运行轨迹」区截一张。
+
+    轨迹是"Agent 可见"的核心展示，也是 README 与对外演示里最该出现的一张图；
+    它通常在报告下方，需要先滚动到该元素再截。
+    """
+    panel = page.locator(".trace-panel").first
+    try:
+        panel.scroll_into_view_if_needed(timeout=8000)
+        time.sleep(1.2)
+        target = out_dir / "08-agent-trace.png"
+        panel.screenshot(path=str(target))
+        print(f"  已保存 {target}")
+        return True
+    except Exception as exc:  # noqa: BLE001 - 截不到不该影响整轮截图
+        print(f"  [警告] 截不到 Agent 轨迹区：{exc}")
+        return False
 
 
 def main() -> int:
@@ -96,11 +165,11 @@ def main() -> int:
     with sync_playwright() as playwright:
         browser = playwright.chromium.launch()
         page = browser.new_page(viewport=VIEWPORT, device_scale_factor=SCALE)
-        page.goto(args.url, wait_until="domcontentloaded")
-        settle(page, 4.0)
 
         for key, label, filename in pages:
             print(f"→ {label}")
+            page.goto(args.url, wait_until="domcontentloaded")
+            settle(page, 4.0)
             click_sidebar(page, label)
             settle(page)
             if key == "direction":
@@ -108,8 +177,17 @@ def main() -> int:
                     fill_direction_search(page)
                 except Exception as exc:  # noqa: BLE001
                     print(f"  [警告] 方向检索交互失败：{exc}")
+            elif key == "professor":
+                fill_professor_form(page)
             page.screenshot(path=str(out_dir / filename))
             print(f"  已保存 {out_dir / filename}")
+
+            # 研究档案页额外截两张：点开某条记录后的研究简报 + Agent 运行轨迹
+            if key == "history" and open_first_history_record(page):
+                brief = out_dir / "07-brief.png"
+                page.screenshot(path=str(brief))
+                print(f"  已保存 {brief}")
+                shoot_agent_trace(page, out_dir)
         browser.close()
     return 0
 

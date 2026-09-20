@@ -71,6 +71,10 @@ def test_direction_page_explains_how_to_build_an_empty_library(tmp_path, monkeyp
 
     assert not app.exception
     assert any("本地导师库还是空的" in item.value for item in app.info)
+    # 采集工具已经拆到独立项目，提示里不能再指向本仓库里不存在的脚本
+    markdown = " ".join(item.value for item in app.markdown)
+    assert "advisor-fit-crawl" in markdown
+    assert "scripts\\crawl_university.py" not in markdown
 
 
 def test_search_ranks_candidates_and_shows_why(tmp_path, monkeypatch):

@@ -801,11 +801,8 @@ if active_page == "direction":
     if not library_total:
         st.info("本地导师库还是空的。")
         st.markdown(
-            "建库方式（可选，需要联网、由你手动触发）：\n\n"
-            "```powershell\n"
-            ".\\\\.venv\\\\Scripts\\\\python.exe scripts\\\\crawl_university.py"
-            " --university 武汉大学\n"
-            "```\n\n"
+            "建库方式（可选，需要联网、由你手动触发）：导师数据的采集与建库工具是"
+            "**配套的独立项目** `../advisor-fit-crawl/`，用法见那边的 `README.md`。\n\n"
             "还没有库也不影响使用：可以在「Ⅱ 导师档案」里手动填写导师信息，"
             "或者用「📇 从导师名册里挑一位」按学校/学院/姓名选人。"
         )
@@ -988,7 +985,10 @@ if active_page == "history":
         "备份包**不含** API Key（.env）与上传的简历；导师大库可用采集脚本重建。"
     )
     try:
-        entries, _, skipped = collect_entries(settings.data_dir.parent)
+        # 项目根目录（.env / uploads 相对它）+ 实际数据目录（可能由 DATA_DIR 指定在别处）
+        entries, _, skipped = collect_entries(
+            Path(__file__).resolve().parent, data_dir=settings.data_dir
+        )
         if entries:
             st.download_button(
                 "💾 下载数据备份（.zip）",

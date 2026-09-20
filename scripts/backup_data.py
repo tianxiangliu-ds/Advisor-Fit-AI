@@ -50,6 +50,7 @@ def main() -> int:
 
     entries, missing, skipped = collect_entries(
         ROOT,
+        data_dir=ROOT / "data",
         include_big=args.all,
         include_uploads=args.include_uploads,
         include_env=args.include_env,

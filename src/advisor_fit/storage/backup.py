@@ -29,20 +29,25 @@ class BackupEntry:
 def collect_entries(
     root: Path,
     *,
+    data_dir: Path | None = None,
     include_big: bool = False,
     include_uploads: bool = False,
     include_env: bool = False,
 ) -> tuple[list[BackupEntry], list[str], list[str]]:
     """挑出要备份的文件。
 
+    `root` 是项目根目录（`.env`、`uploads/` 相对它）；
+    `data_dir` 是实际的数据目录，默认 `root/data`——线上 Demo 会把数据放到别处，
+    这时仍要备份"真正在用"的那份数据库。
+
     返回 (要打包的文件, 缺失的文件名, 刻意排除的说明)。
     """
-    data_dir = root / "data"
+    source_dir = Path(data_dir) if data_dir is not None else root / "data"
     names = list(DEFAULT_BACKUP_FILES) + (list(BIG_BACKUP_FILES) if include_big else [])
     entries: list[BackupEntry] = []
     missing: list[str] = []
     for name in names:
-        path = data_dir / name
+        path = source_dir / name
         if path.is_file():
             entries.append(BackupEntry(path=path, arcname=f"data/{name}"))
         else:

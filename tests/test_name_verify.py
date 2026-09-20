@@ -172,6 +172,9 @@ def test_parse_card_link_ignores_navigation_cards():
         ("工研院胡耀武", "胡耀武"),
         ("薛 渊", "薛渊"),
         ("陆伟", "陆伟"),
+        # 采集时"姓名"会和表头"职称"粘在一起（见 2026-09 数据清洗事故）
+        ("何鹏职称", "何鹏"),
+        ("谭璇职称", "谭璇"),
     ],
 )
 def test_normalize_person_name_keeps_the_person(raw, normalized):
@@ -180,7 +183,10 @@ def test_normalize_person_name_keeps_the_person(raw, normalized):
     assert normalize_person_name(raw) == normalized
 
 
-@pytest.mark.parametrize("raw", ["董陇军副教授", "刘志祥教授", "工研院胡耀武"])
+@pytest.mark.parametrize(
+    "raw",
+    ["董陇军副教授", "刘志祥教授", "工研院胡耀武", "何鹏职称", "杨虹职称"],
+)
 def test_names_with_title_or_prefix_are_not_auto_deleted(raw):
     """带职称/单位前缀的不是垃圾，规范化后要保住人，不能删。"""
     from advisor_fit.ingest.name_verify import is_safe_to_auto_delete
@@ -191,7 +197,10 @@ def test_names_with_title_or_prefix_are_not_auto_deleted(raw):
 @pytest.mark.parametrize(
     "raw",
     ["郭新闻", "李文化", "方向忠", "闫永达", "玄玉波", "Kok-MengLee", "AndersLindquist",
-     "龚韵", "陈燕鸣"],
+     "龚韵", "陈燕鸣",
+     # 「张学工」是清华大学真实教授。曾经的"学工"词根会在清洗时把他删掉——
+     # 那次事故说明：词根必须经得起"它会不会出现在真人姓名里"这一问。
+     "张学工", "春雷"],
 )
 def test_real_names_and_rare_surnames_are_not_auto_deleted(raw):
     """含「新闻/文化/方向」字样或罕见姓氏、外籍姓名的，都是真人，绝不能自动删。"""
@@ -219,3 +228,25 @@ def test_ui_words_are_safe_to_auto_delete(raw):
     from advisor_fit.ingest.name_verify import is_safe_to_auto_delete
 
     assert is_safe_to_auto_delete(raw) is True
+
+
+def test_ui_root_never_matches_a_real_name():
+    """词根必须经得起这一问："它会不会出现在真人姓名里？"
+
+    反面教材是"学工"：它能拦「学工资料」，但「张学工」是清华大学的真实教授，
+    加进安全词表就会在采集与清洗时把人删掉。拦「学工资料」交给更安全的"资料"。
+    """
+    from advisor_fit.ingest.name_verify import SAFE_UI_ROOTS, has_ui_word
+
+    assert "学工" not in SAFE_UI_ROOTS, "「学工」会误伤「张学工」这类真名"
+    assert "资料" in SAFE_UI_ROOTS, "「学工资料」要靠更安全的「资料」拦住"
+
+    assert has_ui_word("学工资料") or "资料" in "学工资料"
+
+
+def test_nav_words_that_look_like_names_are_still_caught():
+    """去掉"学工"之后，真正的界面词不能因此漏网。"""
+    from advisor_fit.ingest.name_verify import is_safe_to_auto_delete
+
+    for word in ("学工资料", "教工家园", "院友风采", "校园风光", "两院院士"):
+        assert is_safe_to_auto_delete(word) is True, f"{word} 应当被拦下"

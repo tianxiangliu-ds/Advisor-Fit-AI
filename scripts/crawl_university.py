@@ -42,8 +42,9 @@ from advisor_fit.ingest.faculty import (  # noqa: E402
     fetch_html_rendered,
 )
 from advisor_fit.ingest.homepage import html_to_text  # noqa: E402
-from advisor_fit.ingest.supervisor_roster import RosterEntry  # noqa: E402
-from advisor_fit.storage.roster_repo import RosterRepository  # noqa: E402
+from advisor_fit.ingest.supervisor_roster import split_note  # noqa: E402
+from advisor_fit.models.advisor import Advisor  # noqa: E402
+from advisor_fit.storage.advisor_repo import AdvisorRepository  # noqa: E402
 
 # 内置的 top20（按社区名册导师数排序）
 UNIVERSITIES: dict[str, str] = {
@@ -138,11 +139,24 @@ NAME_STOPWORDS = {
 NAV_CROSS_COLLEGE_THRESHOLD = 6
 
 
+# 「师资」页上常见的职称写法，长的排前面避免「教授」吃掉「副教授」
+TITLE_WORDS = (
+    "助理研究员", "特聘副研究员", "特聘研究员", "助理教授", "特聘教授",
+    "副研究员", "副教授", "研究员", "讲师", "教授", "博士后",
+    "高级工程师", "工程师", "实验师", "讲师（博导）",
+)
+_TAG_RE = re.compile(r"<[^>]+>")
+_TR_RE = re.compile(r"<tr[^>]*>(.*?)</tr>", re.IGNORECASE | re.DOTALL)
+_TD_RE = re.compile(r"<t[dh][^>]*>(.*?)</t[dh]>", re.IGNORECASE | re.DOTALL)
+_EMAIL_RE = re.compile(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}")
+
+
 @dataclass
 class CollegeResult:
     college: str
     list_url: str = ""
     names: list[str] = field(default_factory=list)
+    entries: list[dict] = field(default_factory=list)
     note: str = ""
 
 
@@ -293,6 +307,20 @@ def discover_colleges(
                 best = links
         if len(best) >= 3:
             break
+
+    if len(best) < 3:
+        # 最后一招：强制用浏览器渲染首页与候选入口各试一次
+        for url in [home, *candidate_dir_urls(home_html, home)[:3]]:
+            try:
+                html = _fetch(url, client=client, timeout=timeout, js=True)
+            except Exception:  # noqa: BLE001
+                continue
+            links = _college_links(html, url)
+            if len(links) > len(best):
+                best = links
+            if len(best) >= 3:
+                break
+
     return _expand_generic_entries(best, client=client, timeout=timeout)
 
 
@@ -315,29 +343,168 @@ def find_faculty_page(college_url: str, *, client=None, timeout: float = 20.0) -
 
 
 def extract_names(html: str, base_url: str) -> list[str]:
-    """从师资页里提取导师姓名。
+    """只取姓名（用于判断这一页值不值得细解析）。"""
+    return [item["name"] for item in extract_entries(html, base_url)]
 
-    判据：锚文本是 2–4 个汉字、**首字是常见中文姓氏**、且不在导航词表里。
-    只靠"2-4 个汉字"会把「学院简介」「师资队伍」「下页」当成名字，
-    加上姓氏判断后误判能压到很低。
+
+def _cell_text(fragment: str) -> str:
+    return re.sub(r"\s+", "", _TAG_RE.sub("", fragment))
+
+
+def extract_table_rows(html: str) -> list[list[str]]:
+    """把 <table> 的每一行拆成单元格文本——很多师资页用表格列 姓名/职称/方向/邮箱。"""
+    rows: list[list[str]] = []
+    for row_html in _TR_RE.findall(html):
+        cells = [_cell_text(cell) for cell in _TD_RE.findall(row_html)]
+        cells = [cell for cell in cells if cell]
+        if len(cells) >= 2:
+            rows.append(cells)
+    return rows
+
+
+def _match_title(text: str) -> str:
+    for word in TITLE_WORDS:
+        if text == word:
+            return word
+    for word in TITLE_WORDS:
+        if word in text and len(text) <= 12:
+            return word
+    return ""
+
+
+def extract_entries(html: str, base_url: str) -> list[dict]:
+    """提取导师条目：姓名 +（能拿到的）职称 / 邮箱 / 研究方向 / 个人主页。
+
+    两条路并用：
+    ① 链接：锚文本是中文姓名的，拿到姓名与个人主页链接；
+    ② 表格：姓名/职称/邮箱/方向并排成列时，把同一行的其它单元格补到这个人身上。
     """
-    names: list[str] = []
-    seen: set[str] = set()
+    entries: dict[str, dict] = {}
+
+    def _entry(name: str) -> dict:
+        return entries.setdefault(
+            name,
+            {"name": name, "title": "", "email": "", "directions": "", "homepage_url": ""},
+        )
+
     for link in extract_links(html, base_url):
         text = re.sub(r"\s+", "", link["text"])
-        if text in NAME_STOPWORDS:
+        if text in NAME_STOPWORDS or not looks_like_chinese_name(text):
             continue
-        if not looks_like_chinese_name(text):
+        item = _entry(text)
+        if not item["homepage_url"]:
+            item["homepage_url"] = link["href"]
+
+    for row in extract_table_rows(html):
+        name = ""
+        for cell in row:
+            if cell not in NAME_STOPWORDS and looks_like_chinese_name(cell):
+                name = cell
+                break
+        if not name:
             continue
-        if text in seen:
+        item = _entry(name)
+        for cell in row:
+            if cell == name:
+                continue
+            if not item["email"]:
+                found = _EMAIL_RE.search(cell)
+                if found:
+                    item["email"] = found.group(0)
+                    continue
+            if not item["title"]:
+                title = _match_title(cell)
+                if title:
+                    item["title"] = title
+                    continue
+            if not item["directions"] and 6 <= len(cell) <= 120 and not _EMAIL_RE.search(cell):
+                item["directions"] = cell
+
+    return list(entries.values())
+
+
+_DIRECTION_MARKERS = ("研究方向", "研究领域", "主要研究", "研究兴趣", "科研方向")
+
+
+def extract_detail_fields(html: str, name: str = "") -> dict:
+    """从个人详情页正文里挖出职称 / 邮箱 / 研究方向。
+
+    职称最容易踩的坑：页面导航里就有「博士后」「教授」这类词。
+    所以优先看"和姓名出现在同一行"的职称，其次看显式的「职称：xxx」，
+    最后才退化为普通行匹配，并且跳过"整行就是一个职称词"的导航项。
+    """
+    text = html_to_text(html)
+    fields = {"title": "", "email": "", "directions": ""}
+
+    found = _EMAIL_RE.search(text)
+    if found:
+        fields["email"] = found.group(0)
+
+    lines = [line.strip() for line in text.splitlines() if line.strip()]
+    plain_title = ""
+
+    for line in lines:
+        if not fields["title"] and name and name in line:
+            title = _match_title(line)
+            if title:
+                fields["title"] = title
+        if not fields["title"] and line not in TITLE_WORDS:
+            explicit = re.search(r"(?:职称|职务|岗位)[：:]\s*([^\s，。；、]{2,14})", line)
+            if explicit:
+                fields["title"] = explicit.group(1)
+            elif _match_title(line) and len(line) <= 30:
+                plain_title = plain_title or _match_title(line)
+        if not fields["directions"]:
+            for marker in _DIRECTION_MARKERS:
+                # 只认「以关键词开头」的行，避免把论文标题里的"研究"误当研究方向
+                if line.startswith(marker):
+                    value = line[len(marker) :].lstrip("：: 　").strip()
+                    if 2 <= len(value) <= 120:
+                        fields["directions"] = value
+                    break
+
+    if not fields["title"]:
+        fields["title"] = plain_title
+    return fields
+
+
+def enrich_with_details(
+    entries: list[dict],
+    *,
+    client=None,
+    delay: float,
+    limit: int,
+    timeout: float = 20.0,
+) -> int:
+    """按个人主页链接补采职称/邮箱/研究方向；只为前 limit 位补，避免耗时失控。"""
+    filled = 0
+    for entry in entries[:limit]:
+        url = entry.get("homepage_url") or ""
+        if not url or not url.startswith("http"):
             continue
-        seen.add(text)
-        names.append(text)
-    return names
+        if entry.get("title") and entry.get("email") and entry.get("directions"):
+            continue
+        try:
+            time.sleep(delay)
+            html = _fetch_with_fallback(url, client=client, timeout=timeout)
+        except Exception:  # noqa: BLE001 - 单个人失败不影响整体
+            continue
+        detail = extract_detail_fields(html, entry.get("name", ""))
+        for key, value in detail.items():
+            if value and not entry.get(key):
+                entry[key] = value
+                filled += 1
+    return filled
 
 
 def crawl_college(
-    college: str, url: str, *, client=None, delay: float, timeout: float = 20.0
+    college: str,
+    url: str,
+    *,
+    client=None,
+    delay: float,
+    timeout: float = 20.0,
+    details_per_college: int = 0,
 ) -> CollegeResult:
     result = CollegeResult(college=college)
     try:
@@ -357,10 +524,23 @@ def crawl_college(
         result.note = f"抓师资页失败：{type(exc).__name__}"
         return result
 
-    names = extract_names(html, list_url)
-    if len(names) < 3:
+    entries = extract_entries(html, list_url)
+    if len(entries) < 3:
+        # 静态抓到的姓名太少：这一页很可能是 JS 渲染出来的，强制重抓一次
+        try:
+            time.sleep(delay)
+            rendered = _fetch(list_url, client=client, timeout=timeout, js=True)
+            rendered_entries = extract_entries(rendered, list_url)
+            if len(rendered_entries) > len(entries):
+                entries = rendered_entries
+                html = rendered
+                result.note = "经浏览器渲染取得"
+        except Exception:  # noqa: BLE001 - 渲染失败就用静态结果
+            pass
+
+    if len(entries) < 3:
         # 再试一层：有些学校师资入口先到「系/所」列表，再进具体名单
-        best: list[str] = []
+        best: list[dict] = []
         for link in extract_links(html, list_url)[:25]:
             if not any(key in link["text"] for key in ("系", "所", "中心", "教研室")):
                 continue
@@ -369,17 +549,24 @@ def crawl_college(
                 sub_html = _fetch_with_fallback(link["href"], client=client, timeout=timeout)
             except Exception:  # noqa: BLE001
                 continue
-            sub_names = extract_names(sub_html, link["href"])
-            if len(sub_names) > len(best):
-                best = sub_names
+            sub_entries = extract_entries(sub_html, link["href"])
+            if len(sub_entries) > len(best):
+                best = sub_entries
             if len(best) >= 10:
                 break
-        if len(best) > len(names):
-            names = best
+        if len(best) > len(entries):
+            entries = best
             result.note = "经二级页取得"
 
-    result.names = names
-    if not names:
+    result.entries = entries
+    result.names = [item["name"] for item in entries]
+    if entries and details_per_college > 0:
+        got = enrich_with_details(
+            entries, client=client, delay=delay, limit=details_per_college, timeout=timeout
+        )
+        if got:
+            result.note = (result.note + f"；补采 {got} 个字段").strip("；")
+    if not entries:
         text_len = len(html_to_text(html))
         result.note = f"页面无姓名链接（正文 {text_len} 字，可能是 JS 动态渲染）"
     return result
@@ -393,6 +580,7 @@ def crawl_university(
     delay: float = 1.0,
     discover_only: bool = False,
     max_colleges: int = 0,
+    details_per_college: int = 0,
 ) -> list[CollegeResult]:
     print(f"\n{'=' * 70}\n【{university}】{home}\n{'=' * 70}", flush=True)
     colleges = discover_colleges(home, client=client)
@@ -407,7 +595,9 @@ def crawl_university(
     results: list[CollegeResult] = []
     for index, (name, url) in enumerate(colleges, 1):
         time.sleep(delay)
-        outcome = crawl_college(name, url, client=client, delay=delay)
+        outcome = crawl_college(
+            name, url, client=client, delay=delay, details_per_college=details_per_college
+        )
         results.append(outcome)
         if outcome.names:
             print(f"  [{index}/{len(colleges)}] {name}：{len(outcome.names)} 位", flush=True)
@@ -442,23 +632,39 @@ def save(university: str, results: list[CollegeResult]) -> int:
         sample = "、".join(dropped[:5])
         print(f"  （已丢弃 {len(dropped)} 个站点导航词，例如：{sample}）", flush=True)
 
-    entries: list[RosterEntry] = []
+    advisors: list[Advisor] = []
     payload = []
     for item in results:
-        for name in item.names:
-            entries.append(
-                RosterEntry(
+        entries = item.entries or [
+            {"name": name, "title": "", "email": "", "directions": "", "homepage_url": ""}
+            for name in item.names
+        ]
+        for entry in entries:
+            name, note = split_note(entry["name"])
+            if not name:
+                continue
+            advisors.append(
+                Advisor(
                     university=university,
                     department=item.college,
-                    supervisor=name,
+                    name=name,
+                    note=note,
+                    title=entry.get("title", ""),
+                    email=entry.get("email", ""),
+                    research_directions=(
+                        [entry["directions"]] if entry.get("directions") else []
+                    ),
+                    homepage_url=entry.get("homepage_url", ""),
+                    sources=["official"],
+                    source_url=item.list_url,
                 )
             )
         payload.append(
             {
                 "college": item.college,
                 "list_url": item.list_url,
-                "count": len(item.names),
-                "names": item.names,
+                "count": len(entries),
+                "entries": entries,
                 "note": item.note,
             }
         )
@@ -469,10 +675,10 @@ def save(university: str, results: list[CollegeResult]) -> int:
         json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8"
     )
 
-    if entries:
-        repo = RosterRepository(settings.data_dir / "supervisor_roster.db")
-        repo.upsert_official(entries, source_url="官网院系师资页")
-    return len(entries)
+    if advisors:
+        repo = AdvisorRepository(settings.data_dir / "advisors.db")
+        repo.upsert_many(advisors, source="official")
+    return len(advisors)
 
 
 def main() -> int:
@@ -487,6 +693,10 @@ def main() -> int:
     parser.add_argument(
         "--js", action="store_true",
         help="强制用浏览器渲染取页（应对 JS 动态站点，较慢）",
+    )
+    parser.add_argument(
+        "--details-per-college", type=int, default=0,
+        help="每个学院额外进入前 N 位导师的个人主页，补采职称/邮箱/研究方向（0=不补）",
     )
     args = parser.parse_args()
 
@@ -516,6 +726,7 @@ def main() -> int:
                     delay=args.delay,
                     discover_only=args.discover_only,
                     max_colleges=args.max_colleges,
+                    details_per_college=args.details_per_college,
                 )
             except Exception as exc:  # noqa: BLE001 - 单所学校失败不影响其它
                 print(f"  {university} 整体失败：{type(exc).__name__}: {exc}", flush=True)

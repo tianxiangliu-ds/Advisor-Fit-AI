@@ -1,0 +1,13 @@
+{
+  "_note": "手工整理的极小样例，仅用于本地验证「导入 → 查询 → 选人」这条链路。它不是社区数据本身；real 数据请按 README 的说明自行下载后导入。",
+  "data": [
+    {"school_cate": "985", "university": "武汉大学", "department": "信息管理学院", "supervisor": "陆伟", "rate": 0, "description": "样例占位：评价内容会被导入程序丢弃"},
+    {"school_cate": "985", "university": "武汉大学", "department": "信息管理学院", "supervisor": "马费成", "rate": 0, "description": "样例占位"},
+    {"school_cate": "985", "university": "武汉大学", "department": "信息管理学院", "supervisor": "李纲", "rate": 0, "description": "样例占位"},
+    {"school_cate": "985", "university": "武汉大学", "department": "信息管理学院", "supervisor": "王晓光", "rate": 0, "description": "样例占位"},
+    {"school_cate": "985", "university": "武汉大学", "department": "信息管理学院", "supervisor": "安璐", "rate": 0, "description": "样例占位"},
+    {"school_cate": "985", "university": "武汉大学", "department": "信息管理学院", "supervisor": "赵蓉英", "rate": 0, "description": "样例占位"},
+    {"school_cate": "985", "university": "武汉大学", "department": "计算机学院", "supervisor": "样例教师甲", "rate": 0, "description": "样例占位"},
+    {"school_cate": "985", "university": "武汉大学", "department": "计算机学院", "supervisor": "样例教师乙", "rate": 0, "description": "样例占位"}
+  ]
+}

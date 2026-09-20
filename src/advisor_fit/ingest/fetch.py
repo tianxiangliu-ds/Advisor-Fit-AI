@@ -26,6 +26,8 @@ from urllib.parse import urlparse
 
 import httpx
 
+from advisor_fit.storage.cache import PROFILE_TTL_SECONDS, PageCache
+
 USER_AGENT = "AdvisorFitAI/0.1 (personal research tool; contact: local user)"
 
 # 抓取结果的状态码
@@ -90,6 +92,8 @@ class Fetcher:
         clock: Callable[[], float] = time.monotonic,
         sleep: Callable[[float], None] = time.sleep,
         robots_loader: RobotsLoader | None = None,
+        cache: PageCache | None = None,
+        cache_ttl_seconds: int = PROFILE_TTL_SECONDS,
     ) -> None:
         self.user_agent = user_agent
         self.min_interval_seconds = min_interval_seconds
@@ -102,6 +106,8 @@ class Fetcher:
         self._robots_loader = robots_loader or self._load_robots
         self._robots_cache: dict[str, bool | None] = {}
         self._last_request_at: dict[str, float] = {}
+        self._cache = cache
+        self.cache_ttl_seconds = cache_ttl_seconds
 
     # -- 内部 -----------------------------------------------------------------
 
@@ -179,6 +185,23 @@ class Fetcher:
                 elapsed_ms=self._elapsed_ms(started),
             )
 
+        # 保质期内直接用缓存：不再访问对方网站，也不再花时间
+        if self._cache is not None:
+            cached = self._cache.get(url)
+            if cached is not None:
+                return FetchResult(
+                    url=url,
+                    outcome=OUTCOME_OK,
+                    final_url=url,
+                    status_code=200,
+                    text=cached.text,
+                    content_hash=cached.content_hash,
+                    robots_allowed=cached.robots_allowed,
+                    from_cache=True,
+                    attempts=0,
+                    elapsed_ms=self._elapsed_ms(started),
+                )
+
         headers = {"User-Agent": self.user_agent}
         if etag:
             headers["If-None-Match"] = etag
@@ -228,13 +251,23 @@ class Fetcher:
                 )
 
             text = response.text
+            digest = content_hash(text)
+            if self._cache is not None:
+                self._cache.put(
+                    url,
+                    text=text,
+                    content_hash=digest,
+                    etag=response.headers.get("ETag"),
+                    robots_allowed=allowed,
+                    ttl_seconds=self.cache_ttl_seconds,
+                )
             return FetchResult(
                 url=url,
                 outcome=OUTCOME_OK,
                 final_url=str(response.url),
                 status_code=response.status_code,
                 text=text,
-                content_hash=content_hash(text),
+                content_hash=digest,
                 robots_allowed=allowed,
                 attempts=attempts,
                 elapsed_ms=self._elapsed_ms(started),

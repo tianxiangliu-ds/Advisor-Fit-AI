@@ -14,6 +14,7 @@ import streamlit as st
 from pydantic import ValidationError
 
 from advisor_fit.agents.research import research_professor
+from advisor_fit.analysis.identity import STATUS_LABELS, assess_identity
 from advisor_fit.config import settings
 from advisor_fit.export.report import export_docx, export_json, export_markdown
 from advisor_fit.harness.budget import BudgetTracker
@@ -37,7 +38,9 @@ from advisor_fit.ingest.profile_fallback import REQUIRED_FIELDS, build_field_rep
 from advisor_fit.llm.provider import NullLLM, build_llm
 from advisor_fit.manual_pipeline import run_manual_pipeline
 from advisor_fit.providers.wanfang import WanfangProvider
+from advisor_fit.storage.cache import PageCache
 from advisor_fit.storage.repository import Repository
+from advisor_fit.storage.roster_repo import RosterRepository
 from advisor_fit.ui_state import forget_widgets, remember_widgets, restore_widgets
 from advisor_fit.ui_theme import CSS
 
@@ -57,7 +60,7 @@ _PROFESSOR_STATE_KEYS = (
     "prof_interests", "prof_homepage", "prof_english_name", "prof_search_institution",
     "prof_seed_titles", "_faculty_directions", "_faculty_seed_titles",
     "candidate_papers", "_research_confirm", "_research_steps", "_research_granted",
-    "_research_degraded", "field_report",
+    "_research_degraded", "field_report", "identity_result", "homepage_profile",
     "result", "identity_confirmed", "paper_read_confirmed", "run_label",
     "manual_paper_count",
 )
@@ -264,6 +267,91 @@ _FIELD_STATUS_BADGES = {
     "INFERRED": "🟡 待核对",
     "UNKNOWN": "⚪ 未知",
 }
+
+_IDENTITY_MARKS = {True: "✅", False: "🔴", None: "⚪"}
+
+
+def _page_cache() -> PageCache:
+    """网页缓存的存放位置（同一链接在保质期内不再重复抓取）。"""
+    return PageCache(settings.data_dir / "page_cache.db")
+
+
+def _refresh_professor_review(manual: dict[str, str] | None = None) -> None:
+    """重算「字段补齐情况」与「身份核对」，结果存进 session_state。
+
+    manual 用于字段来源的归属：解析主页后要传入"解析前用户已填的内容"，
+    否则官网抓来的值会被误标成"你手动填写"。
+    """
+    profile = st.session_state.get("homepage_profile")
+    homepage_html = st.session_state.get("homepage_html", "")
+    sources = dict(manual) if manual is not None else _manual_professor_fields()
+    current = _manual_professor_fields()
+    st.session_state["field_report"] = build_field_report(
+        manual=sources,
+        homepage_html=homepage_html,
+        page_text=html_to_text(homepage_html) if homepage_html else "",
+        llm_profile=profile,
+        source_url=st.session_state.get("prof_homepage") or None,
+    )
+    st.session_state["identity_result"] = assess_identity(
+        name=current["name"],
+        institution=current["institution"],
+        email=current["email"],
+        department=current["department"],
+        homepage_profile=profile,
+        known_directions=_split_terms(current["declared_interests"]),
+    )
+
+
+def _render_identity_panel(result) -> None:
+    """把身份核对的每条线索摊开：支持的打勾，对不上的标红并提醒核对。"""
+    with st.container(border=True):
+        st.markdown('<div class="section-note">IDENTITY CHECK / 导师身份核对</div>',
+                    unsafe_allow_html=True)
+        label = STATUS_LABELS.get(result.status.value, result.status.value)
+        st.write(f"**{label}**　·　支持 {result.score} 项线索")
+        for signal in result.signals:
+            mark = _IDENTITY_MARKS.get(signal.matched, "⚪")
+            st.markdown(f"{mark} **{signal.label}**　{signal.detail}")
+        if not result.signals:
+            st.caption("还没有可用于核对的线索（邮箱、机构、论文等）。先补主页或邮箱会更准。")
+        if result.conflicts:
+            st.warning("以下线索对不上，请核对是不是同名他人：" + "；".join(result.conflicts))
+
+
+def _render_roster_picker() -> None:
+    """从本地名册里挑一位导师（只含学校 / 学院 / 姓名，不含任何评价内容）。"""
+    try:
+        repo = RosterRepository(settings.data_dir / "supervisor_roster.db")
+        universities = repo.universities()
+    except Exception:  # noqa: BLE001 - 名册缺失或损坏不影响手动录入
+        return
+    if not universities:
+        return
+
+    with st.expander("📇 从导师名册里挑一位（只含学校 / 学院 / 姓名）"):
+        st.caption(
+            f"名册共收录 {repo.count()} 条记录。它只回答「这个学院有哪些导师」，"
+            "不含评价内容，也不能替代官网核实。"
+        )
+        current = st.session_state.get("prof_institution", "")
+        index = universities.index(current) if current in universities else 0
+        university = st.selectbox("学校", universities, index=index, key="roster_university")
+        departments = repo.departments(university)
+        department = ""
+        if departments:
+            department = st.selectbox("学院", departments, key="roster_department")
+        names = repo.lookup(university, department or None)
+        if not names:
+            st.caption("该学院暂无名册记录。")
+            return
+        name = st.selectbox("导师姓名", names, key="roster_supervisor")
+        if st.button("填入导师信息", key="roster_fill"):
+            st.session_state["prof_name"] = name
+            st.session_state["prof_institution"] = university
+            if department:
+                st.session_state["prof_department"] = department
+            st.success(f"已填入「{name} · {university} · {department}」。主页链接仍需你自己提供。")
 
 
 def _render_field_report(report) -> None:
@@ -833,7 +921,7 @@ if active_page == "professor":
             profile = None
             try:
                 with st.spinner("正在解析主页…"):
-                    fetched = Fetcher().fetch(url)
+                    fetched = Fetcher(cache=_page_cache()).fetch(url)
                     if fetched.ok:
                         profile = parse_homepage_html(fetched.text, _llm())
             except Exception as exc:  # noqa: BLE001 - 任何异常都降级为"按已填字段生成清单"
@@ -866,13 +954,11 @@ if active_page == "professor":
                 )
 
             html = fetched.text if (fetched is not None and fetched.ok) else ""
-            st.session_state["field_report"] = build_field_report(
-                manual=manual_before,
-                homepage_html=html,
-                page_text=html_to_text(html) if html else "",
-                llm_profile=profile,
-                source_url=url,
-            )
+            st.session_state["homepage_profile"] = profile
+            st.session_state["homepage_html"] = html
+            _refresh_professor_review(manual=manual_before)
+            if fetched is not None and fetched.from_cache:
+                st.caption("这个链接的页面在保质期内，直接用了本地缓存，没有再访问对方网站。")
 
     left, right = st.columns(2)
     with left:
@@ -892,12 +978,14 @@ if active_page == "professor":
 
     if st.button("📋 检查信息补齐情况",
                  help="不联网，只看你已填的字段哪些已确认、哪些还缺"):
-        st.session_state["field_report"] = build_field_report(
-            manual=_manual_professor_fields()
-        )
+        _refresh_professor_review()
 
+    if st.session_state.get("identity_result") is not None:
+        _render_identity_panel(st.session_state["identity_result"])
     if st.session_state.get("field_report") is not None:
         _render_field_report(st.session_state["field_report"])
+
+    _render_roster_picker()
 
     if st.button("🔍 从导师库填充", help="在已采集的高校导师库中按姓名+学校查找并自动填充"):
         matches = _lookup_faculty(professor_name, institution)

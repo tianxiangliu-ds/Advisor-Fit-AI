@@ -41,12 +41,14 @@ from advisor_fit.providers.disciplines import (
 from advisor_fit.providers.europepmc import EuropePmcProvider
 from advisor_fit.providers.merge import merge_works
 from advisor_fit.providers.openalex import OpenAlexProvider, OpenAlexUnavailable
+from advisor_fit.providers.scopus import ScopusProvider, ScopusUnavailable
 from advisor_fit.providers.sources import (
     SourceSpec,
     classify_sources,
     load_discipline_keywords,
     load_sources,
 )
+from advisor_fit.providers.springer import SpringerProvider, SpringerUnavailable
 from advisor_fit.providers.wanfang import WanfangProvider
 
 # 源状态：ok 有结果 / empty 查到了但没结果 / error 出错 / blocked 被对方拦下
@@ -184,6 +186,17 @@ class SearchRouter:
             provider = CrossrefProvider(client=client)
         elif key == "wanfang":
             provider = WanfangProvider(self._key_values.get("wanfang_app_key", ""), client=client)
+        elif key == "scopus":
+            provider = ScopusProvider(self._key_values.get("scopus_api_key", ""), client=client)
+        elif key == "springer_meta":
+            provider = SpringerProvider(
+                self._key_values.get("springer_meta_api_key", ""), client=client
+            )
+        elif key == "springer_open_access":
+            provider = SpringerProvider(
+                open_access_api_key=self._key_values.get("springer_open_access_api_key", ""),
+                client=client,
+            )
         # 未接入适配器的源（登记了但代码还没写）：返回 None，路由器会如实说明并跳过
         self._providers[key] = provider
         return provider
@@ -241,7 +254,12 @@ class SearchRouter:
                     if by_title
                     else method(query_name, institution=institution, limit=limit, **extra_kwargs)
                 )
-            except (DblpUnavailable, OpenAlexUnavailable) as exc:
+            except (
+                DblpUnavailable,
+                OpenAlexUnavailable,
+                ScopusUnavailable,
+                SpringerUnavailable,
+            ) as exc:
                 return failed("blocked", str(exc))
             except (httpx.TimeoutException, httpx.TransportError) as exc:
                 last_error = exc

@@ -21,7 +21,13 @@ def _anchor() -> OfficialIdentityAnchor:
 
 def _works() -> list[Work]:
     return [
-        Work(id="W1", title="RAG Survey", year=2026, topics=["检索增强生成"]),
+        Work(
+            id="W1",
+            title="RAG Survey",
+            year=2026,
+            topics=["检索增强生成"],
+            authors=["王伟", "李四"],
+        ),
         Work(id="W2", title="RAG Eval", year=2025, topics=["检索增强生成"]),
         Work(id="W3", title="RAG Robustness", year=2025, topics=["检索增强生成"]),
     ]
@@ -50,3 +56,18 @@ def test_declared_and_observed_topics_are_separate():
 def test_recruiting_unknown_when_no_dated_statement():
     profile = assemble_professor_profile(_anchor(), _works(), _evidences(), current_year=2026)
     assert profile.recruiting.status == "UNKNOWN"
+
+
+def test_recent_publications_keep_authors_for_collaboration_checks():
+    profile = assemble_professor_profile(_anchor(), _works(), _evidences(), current_year=2026)
+
+    assert profile.recent_publications[0].authors == ["王伟", "李四"]
+
+
+def test_profile_uses_homepage_based_identity_key_when_available():
+    anchor = _anchor().model_copy(update={"homepage": "https://u.edu/faculty/wang"})
+
+    profile = assemble_professor_profile(anchor, _works(), _evidences(), current_year=2026)
+
+    assert profile.professor_id.startswith("prof_")
+    assert profile.professor_id != "王伟"

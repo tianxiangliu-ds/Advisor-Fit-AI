@@ -14,6 +14,7 @@ import inspect
 import time
 from collections import Counter
 from dataclasses import dataclass, field
+from typing import Protocol
 
 from pydantic import BaseModel
 
@@ -31,6 +32,10 @@ from advisor_fit.llm.provider import NullLLM
 from advisor_fit.providers.academic import Work
 from advisor_fit.providers.affiliation import institutions_conflict
 from advisor_fit.providers.crossref import CrossrefProvider
+
+
+class TitleFallback(Protocol):
+    def search_by_title(self, title: str) -> list[Work]: ...
 
 
 def _mark(trace: RunTrace | None, stage: Stage) -> None:
@@ -262,6 +267,7 @@ def research_professor(
     granted_confirmations: list[str] | None = None,
     budget: BudgetTracker | None = None,
     trace: RunTrace | None = None,
+    title_fallback: TitleFallback | None = None,
 ) -> ResearchResult:
     """跑一轮导师研究：检索 →（必要时）确认门控 → 作者消歧 → 履历调查。
 
@@ -269,7 +275,7 @@ def research_professor(
     seed_titles 用于作者名查不到时按「代表论文标题」兜底检索。
     discipline 用于指定学科（决定补查哪些专业库）；留空则由路由器自己判断。
     """
-    crossref = CrossrefProvider()
+    crossref = title_fallback or CrossrefProvider()
     self_counting = bool(getattr(provider, "counts_external_calls", False))
     if budget is not None and hasattr(provider, "bind_budget"):
         provider.bind_budget(budget)
@@ -310,7 +316,10 @@ def research_professor(
             title, **_supported_kwargs(provider, source=source, discipline=discipline)
         )
         if not works:
-            works = crossref.search_by_title(title)
+            try:
+                works = crossref.search_by_title(title)
+            except Exception:  # noqa: BLE001 - 补充来源失败不能丢掉主来源结果
+                works = []
         papers = [work_to_paper(work) for work in works]
         _collect(papers)
         return {"count": len(works), "papers": papers}
@@ -545,7 +554,17 @@ def _research_without_llm(
                 **_supported_kwargs(provider, source=source or "auto", discipline=discipline),
             )
             if not works:
-                works = crossref.search_by_title(title)
+                try:
+                    works = crossref.search_by_title(title)
+                except Exception as exc:  # noqa: BLE001 - 可选兜底失败时保留已有论文
+                    if trace is not None:
+                        trace.add(
+                            kind="tool_call",
+                            name="search_by_title_fallback",
+                            status="error",
+                            error=str(exc) or type(exc).__name__,
+                        )
+                    works = []
             _record("search_by_title", {"title": title}, len(works), started)
             papers.extend(work_to_paper(work) for work in works)
     papers = _dedupe_papers(papers)

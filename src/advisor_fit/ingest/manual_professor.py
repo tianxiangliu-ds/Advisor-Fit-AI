@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import hashlib
 from datetime import UTC, datetime
-from urllib.parse import urlparse
+from urllib.parse import urlsplit, urlunsplit
 
 from pydantic import BaseModel, Field, field_validator
 
@@ -30,10 +30,33 @@ def _clean_optional(value: str | None) -> str | None:
 
 def _validate_http_url(value: str) -> str:
     value = _clean_required(value)
-    parsed = urlparse(value)
+    parsed = urlsplit(value)
     if parsed.scheme not in {"http", "https"} or not parsed.netloc:
         raise ValueError("必须是 http 或 https 链接")
     return value
+
+
+def _normalise_homepage_url(value: str) -> str:
+    """Normalize a homepage enough for a stable local identity key."""
+    parsed = urlsplit(value.strip())
+    path = parsed.path.rstrip("/") or "/"
+    return urlunsplit((parsed.scheme.lower(), parsed.netloc.lower(), path, "", ""))
+
+
+def professor_identity_key(
+    homepage_url: str | None,
+    institution: str | None,
+    department: str | None,
+    name: str | None,
+) -> str:
+    """Create a stable local professor key, preferring the official homepage."""
+    if homepage_url:
+        seed = f"homepage:{_normalise_homepage_url(homepage_url)}"
+    else:
+        seed = "fallback:" + "|".join(
+            value.strip().casefold() for value in (institution or "", department or "", name or "")
+        )
+    return "prof_" + hashlib.sha256(seed.encode("utf-8")).hexdigest()[:16]
 
 
 class ManualPaperInput(BaseModel):
@@ -43,6 +66,7 @@ class ManualPaperInput(BaseModel):
     source_url: str = Field(min_length=1)
     source_platform: str = "其他"
     keywords: list[str] = []
+    authors: list[str] = []
     user_confirmed: bool = False
 
     _clean_title = field_validator("title")(_clean_required)
@@ -57,6 +81,16 @@ class ManualPaperInput(BaseModel):
     @field_validator("keywords")
     @classmethod
     def clean_keywords(cls, values: list[str]) -> list[str]:
+        cleaned: list[str] = []
+        for value in values:
+            value = value.strip()
+            if value and value not in cleaned:
+                cleaned.append(value)
+        return cleaned
+
+    @field_validator("authors")
+    @classmethod
+    def clean_authors(cls, values: list[str]) -> list[str]:
         cleaned: list[str] = []
         for value in values:
             value = value.strip()
@@ -207,6 +241,7 @@ def build_manual_materials(
                 abstract=paper.abstract,
                 source_url=paper.source_url,
                 source_platform=paper.source_platform,
+                authors=paper.authors,
             )
         )
         evidences.append(

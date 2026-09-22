@@ -20,15 +20,22 @@ from __future__ import annotations
 
 import os
 import runpy
+import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent
+SRC_DIR = ROOT / "src"
 DEMO_DATA_DIR = ROOT / "data" / "demo-data"
 DEMO_UPLOADS_DIR = ROOT / "data" / "demo-uploads"
+
+# 项目采用 src/ 目录布局；也让 Demo 入口在直接执行时能找到项目代码。
+if str(SRC_DIR) not in sys.path:
+    sys.path.insert(0, str(SRC_DIR))
 
 # ⚠️ 必须放在任何 advisor_fit 导入之前：Settings 是导入时构造的
 os.environ.setdefault("DATA_DIR", str(DEMO_DATA_DIR))
 os.environ.setdefault("UPLOADS_DIR", str(DEMO_UPLOADS_DIR))
+os.environ.setdefault("APP_MODE", "demo")
 
 from advisor_fit.demo_data import ensure_demo_data  # noqa: E402
 

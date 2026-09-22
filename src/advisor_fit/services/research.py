@@ -29,11 +29,23 @@ class ResearchRequest:
 
     name: str
     institution: str = ""
+    department: str = ""
+    alternate_institution: str = ""
     english_name: str = ""
     source: str = "auto"          # auto | zh | en
     discipline: str = ""
     seed_titles: list[str] = field(default_factory=list)
     known_directions: list[str] = field(default_factory=list)
+
+    @property
+    def effective_institution(self) -> str:
+        """用户补充的纠错机构优先；未填写时仍使用导师档案里的学校。"""
+        return self.alternate_institution.strip() or self.institution.strip()
+
+    @property
+    def routing_hints(self) -> list[str]:
+        """给检索路由的本地线索：院系优先，再使用主页已提取的研究方向。"""
+        return [item.strip() for item in [self.department, *self.known_directions] if item.strip()]
 
 
 @dataclass
@@ -88,6 +100,9 @@ def build_provider(budget: BudgetTracker):
         key_values={
             "wanfang_app_key": settings.wanfang_app_key,
             "aminer_api_key": settings.aminer_api_key,
+            "scopus_api_key": settings.scopus_api_key,
+            "springer_meta_api_key": settings.springer_meta_api_key,
+            "springer_open_access_api_key": settings.springer_open_access_api_key,
         },
         budget=budget,
         contact_email=settings.contact_email,
@@ -143,12 +158,12 @@ def run_research(
         llm,
         provider,
         name=request.name,
-        institution=request.institution or None,
+        institution=request.effective_institution or None,
         english_name=request.english_name or None,
         source=request.source if request.source in ("zh", "en") else "auto",
         discipline=request.discipline or None,
         seed_titles=request.seed_titles or None,
-        known_directions=request.known_directions or None,
+        known_directions=request.routing_hints or None,
         max_steps=max_steps,
         resume_steps=resume_steps,
         granted_confirmations=granted_confirmations,

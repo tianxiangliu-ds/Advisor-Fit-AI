@@ -118,12 +118,39 @@ class Repository:
             ).fetchone()
         return int(row["n"])
 
-    def list_runs(self) -> list[dict[str, Any]]:
+    def list_runs(self, *, allowed_ids: set[str] | None = None) -> list[dict[str, Any]]:
+        """列出研究记录；传入 ``allowed_ids`` 时只返回获准查看的记录。"""
+        if allowed_ids is not None and not allowed_ids:
+            return []
+        with closing(self._connect()) as conn:
+            sql = "SELECT id, status, name, created_at, updated_at FROM runs"
+            params: tuple[str, ...] = ()
+            if allowed_ids is not None:
+                ordered_ids = tuple(sorted(allowed_ids))
+                placeholders = ",".join("?" for _ in ordered_ids)
+                sql += f" WHERE id IN ({placeholders})"
+                params = ordered_ids
+            rows = conn.execute(sql + " ORDER BY created_at DESC", params).fetchall()
+        return [dict(row) for row in rows]
+
+    def find_run_ids_by_artifact_field(
+        self, kind: str, field: str, value: Any
+    ) -> set[str]:
+        """按 artifact 的结构化字段精确查找所属运行。"""
         with closing(self._connect()) as conn:
             rows = conn.execute(
-                "SELECT id, status, name, created_at, updated_at FROM runs ORDER BY created_at DESC"
+                "SELECT run_id, payload_json FROM artifacts WHERE kind = ?",
+                (kind,),
             ).fetchall()
-        return [dict(row) for row in rows]
+        matched: set[str] = set()
+        for row in rows:
+            try:
+                payload = json.loads(row["payload_json"])
+            except (TypeError, json.JSONDecodeError):
+                continue
+            if isinstance(payload, dict) and payload.get(field) == value:
+                matched.add(str(row["run_id"]))
+        return matched
 
     # -- 持久化 artifact ------------------------------------------------------
 

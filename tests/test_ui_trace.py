@@ -7,6 +7,7 @@
 
 from __future__ import annotations
 
+import advisor_fit.ui_trace as ui_trace
 from advisor_fit.ui_trace import (
     format_duration,
     has_content,
@@ -59,7 +60,8 @@ def test_overview_falls_back_to_step_durations_without_budget():
 
 def test_step_html_shows_name_args_status_and_duration():
     html = trace_step_html(SAMPLE_TRACE["steps"][1])
-    assert "search_by_author" in html
+    assert "按导师姓名检索论文" in html
+    assert "search_by_author" not in html
     assert "institution=武汉大学&amp;name=陆伟" in html
     assert "成功 · 1.4s" in html
     assert 'class="ok"' in html
@@ -107,7 +109,8 @@ def test_panel_escapes_user_supplied_text():
         {"steps": [{"index": 0, "kind": "tool_call", "name": "<script>alert(1)</script>"}]}
     )
     assert "<script>" not in html
-    assert "&lt;script&gt;" in html
+    # 未登记的内部动作名不会原样输出到用户界面，因此恶意字符串既不执行也不展示。
+    assert "script" not in html
 
 
 def test_degraded_html_explains_what_happened():
@@ -175,3 +178,30 @@ def test_rule_mode_note_says_no_model_was_involved():
 
 def test_agent_mode_has_no_rule_note():
     assert trace_mode_note(SAMPLE_TRACE) == ""
+
+
+def test_user_steps_translate_internal_tool_names_into_plain_language():
+    """若主界面再次暴露 search_by_author 这类内部名称，这个测试会失败。"""
+    steps = ui_trace.trace_user_steps(SAMPLE_TRACE)
+
+    assert steps == [
+        {
+            "label": "按导师姓名检索论文",
+            "status": "已完成",
+            "detail": "papers=25",
+        }
+    ]
+
+
+def test_progress_uses_readable_stage_cards_instead_of_an_arrow_sentence():
+    """若阶段退回到挤在一行的箭头文本，这个测试会失败。"""
+    html = ui_trace.trace_progress_html(
+        {"stages": ["seeding", "searching", "disambiguating", "done"]}
+    )
+
+    assert html.count('class="research-stage') == 4
+    assert "开始检索" in html
+    assert "扩展来源" in html
+    assert "核对归属" in html
+    assert "研究完成" in html
+    assert "→" not in html

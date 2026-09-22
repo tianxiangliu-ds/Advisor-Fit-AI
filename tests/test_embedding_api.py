@@ -129,9 +129,9 @@ def test_api_backend_is_semantic_and_uses_higher_thresholds(mock_endpoint):
 
     assert embedder.semantic is True
     assert embedder.name == "api:m"
-    # 真模型的分值尺度更高，门槛必须跟着抬
+    # 门槛按真实数据校准过（相关查询 0.51~0.70 / 无关查询峰值 0.468）
     assert embedder.reason_threshold == 0.45
-    assert embedder.recall_threshold == 0.60
+    assert embedder.recall_threshold == 0.50
 
 
 def test_build_embedder_picks_the_api_backend_from_settings(mock_endpoint):
@@ -167,3 +167,65 @@ def test_direction_search_uses_the_semantic_wording_with_the_api_backend(mock_en
 
     assert hits and "语义相近" in hits[0].reason_text
     assert "字面相近" not in hits[0].reason_text
+
+
+# -- 接真实服务才会遇到的限制 --------------------------------------------------
+
+
+def test_long_inputs_are_batched_into_several_requests(mock_endpoint):
+    """真实服务对一次请求的条数有上限，一次塞太多会被拒。"""
+    with httpx.Client() as client:
+        embedder = ApiEmbedder(
+            client=client, model="m", base_url=mock_endpoint, max_batch=4
+        )
+        vectors = embedder.embed([f"知识图谱 {i}" for i in range(10)])
+
+    assert len(vectors) == 10
+    assert len(RECEIVED) == 3, f"10 条按每批 4 条应当分 3 次，实际 {len(RECEIVED)}"
+    assert [len(r["body"]["input"]) for r in RECEIVED] == [4, 4, 2]
+
+
+def test_results_stay_aligned_across_batches(mock_endpoint):
+    """分批之后顺序不能乱——乱一条，相似度就全算错了。"""
+    with httpx.Client() as client:
+        embedder = ApiEmbedder(
+            client=client, model="m", base_url=mock_endpoint, max_batch=3
+        )
+        vectors = embedder.embed(["知识图谱", "油画", "知识图谱", "油画"])
+
+    # mock 按文本给向量：含"图谱"->[1,0,0]，含"油画"->[0,0,1]
+    assert vectors[0][0] == pytest.approx(1.0)
+    assert vectors[1][2] == pytest.approx(1.0)
+    assert vectors[2][0] == pytest.approx(1.0)
+    assert vectors[3][2] == pytest.approx(1.0)
+
+
+def test_overly_long_texts_are_truncated_before_sending(mock_endpoint):
+    """单条过长会撞 token 上限，发之前先截断。"""
+    with httpx.Client() as client:
+        embedder = ApiEmbedder(
+            client=client, model="m", base_url=mock_endpoint, max_chars=50
+        )
+        embedder.embed(["知识图谱" + "很" * 500])
+
+    assert len(RECEIVED[0]["body"]["input"][0]) == 50
+
+
+def test_incomplete_response_is_rejected_rather_than_misaligned(mock_endpoint):
+    """条数对不上时必须整批判失败。
+
+    若错位拼接，相似度会算在错误的配对上，而且**完全看不出来**——
+    宁可降级成"没有向量信号"，也不要给出悄悄算错的结果。
+    """
+    class ShortResponse:
+        def raise_for_status(self): pass
+        def json(self): return {"data": [{"index": 0, "embedding": [1.0, 0.0]}]}
+
+    class ShortClient:
+        def post(self, url, json, headers=None, timeout=None):
+            return ShortResponse()
+
+    embedder = ApiEmbedder(client=ShortClient(), model="m", base_url="https://x/v1")
+
+    with pytest.raises(ValueError, match="条数不匹配"):
+        embedder.embed(["甲", "乙"])

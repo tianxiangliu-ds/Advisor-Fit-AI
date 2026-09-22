@@ -12,6 +12,7 @@ from advisor_fit.ingest.cv import (
     apply_fact_edits,
     build_student_profile,
     delete_uploaded_cv,
+    extract_pdf_content,
     extract_pdf_markdown,
     extract_pdf_text,
     redact_pii,
@@ -71,6 +72,26 @@ def test_profile_extracts_skills_and_degree(parsed_fixture):
     assert "某大学" in values
 
 
+def test_profile_extracts_project_and_publication_sections_without_llm():
+    """未配置 LLM 时，简历中的明确栏目也不能被静默丢掉。"""
+    profile = build_student_profile(
+        ParsedDocument(
+            text=(
+                "项目经历\n"
+                "校园知识问答系统：使用 Python 与 FastAPI 完成检索接口。\n"
+                "科研成果\n"
+                "《面向教育场景的知识图谱构建方法》\n"
+                "获奖经历\n"
+                "优秀学生奖学金\n"
+            )
+        )
+    )
+
+    facts = {(fact.field, str(fact.value)) for fact in profile.facts}
+    assert ("project", "校园知识问答系统：使用 Python 与 FastAPI 完成检索接口。") in facts
+    assert ("publication", "《面向教育场景的知识图谱构建方法》") in facts
+
+
 def test_apply_fact_edits_supports_edit_add_delete_and_confirmation(parsed_fixture):
     profile = build_student_profile(parsed_fixture)
     edited = apply_fact_edits(
@@ -88,6 +109,17 @@ def test_apply_fact_edits_supports_edit_add_delete_and_confirmation(parsed_fixtu
     ]
     assert all(fact.user_confirmed for fact in edited.facts)
     assert edited.facts[0].id != edited.facts[1].id
+
+
+def test_kept_fact_is_confirmed_without_a_separate_checkbox(parsed_fixture):
+    profile = build_student_profile(parsed_fixture)
+
+    edited = apply_fact_edits(
+        profile,
+        [{"field": "skill", "value": "Python"}],
+    )
+
+    assert edited.facts[0].user_confirmed is True
 
 
 def test_delete_uploaded_cv_removes_only_exact_run_file(tmp_path):
@@ -110,3 +142,28 @@ def test_delete_uploaded_cv_rejects_path_like_run_id(tmp_path):
 def test_extract_pdf_markdown_falls_back_to_pypdf(make_cv_pdf):
     path = make_cv_pdf("Python machine learning")
     assert "Python" in extract_pdf_markdown(path)
+
+
+def test_extract_pdf_content_reports_pypdf_fallback(make_cv_pdf, monkeypatch):
+    path = make_cv_pdf("Python machine learning")
+    monkeypatch.setattr("advisor_fit.ingest.cv._docling_markdown", lambda _path: None)
+
+    result = extract_pdf_content(path)
+
+    assert result.engine == "pypdf"
+    assert "Python" in result.text
+
+
+def test_extract_pdf_content_reports_docling_when_layout_parser_succeeds(
+    make_cv_pdf, monkeypatch
+):
+    path = make_cv_pdf("fallback text")
+    monkeypatch.setattr(
+        "advisor_fit.ingest.cv._docling_markdown",
+        lambda _path: "# 教育背景\n\n- 武汉大学",
+    )
+
+    result = extract_pdf_content(path)
+
+    assert result.engine == "docling"
+    assert result.text == "# 教育背景\n\n- 武汉大学"

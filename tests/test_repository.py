@@ -6,6 +6,7 @@ import pytest
 
 from advisor_fit.models.common import SourceRecord
 from advisor_fit.models.evidence import Claim, ClaimStatus, Evidence
+from advisor_fit.models.student import StudentProfile
 from advisor_fit.storage.repository import Repository
 
 
@@ -102,6 +103,35 @@ def test_list_runs_returns_created_runs(tmp_path):
     run2 = repo.create_run()
     ids = {run["id"] for run in repo.list_runs()}
     assert {run1, run2} <= ids
+
+
+def test_list_runs_can_be_limited_to_the_current_visitor(tmp_path):
+    """公开 Demo 传入可见 ID 后，不能列出其他访客的研究记录。"""
+    repo = Repository(tmp_path / "test.db")
+    demo_run = repo.create_run(name="虚构演示记录")
+    own_run = repo.create_run(name="本次访客记录")
+    repo.create_run(name="另一位访客记录")
+
+    listed = repo.list_runs(allowed_ids={demo_run, own_run})
+
+    assert {run["id"] for run in listed} == {demo_run, own_run}
+
+
+def test_find_run_ids_by_exact_artifact_field(tmp_path):
+    """演示记录按结构化标记识别，不能靠可能重名的记录标题。"""
+    repo = Repository(tmp_path / "test.db")
+    demo_run = repo.create_run(name="相同标题")
+    visitor_run = repo.create_run(name="相同标题")
+    repo.save_student_profile(
+        demo_run, StudentProfile(student_id="demo_student", facts=[])
+    )
+    repo.save_student_profile(
+        visitor_run, StudentProfile(student_id="visitor_student", facts=[])
+    )
+
+    assert repo.find_run_ids_by_artifact_field(
+        "student_profile", "student_id", "demo_student"
+    ) == {demo_run}
 
 
 def test_run_name_can_be_set_and_listed(tmp_path):

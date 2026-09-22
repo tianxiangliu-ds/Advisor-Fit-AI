@@ -90,6 +90,35 @@ def build_student_profile_llm(
             )
         )
 
+    # 页面上的“学生事实”以 facts 为唯一来源。不能只把项目/论文放进
+    # 隐藏的结构化字段，否则用户会误以为 PDF 没有被解析到这些经历。
+    def add_experience_fact(field: str, value: str) -> None:
+        value = value.strip()
+        key = (field, value)
+        if not value or key in seen:
+            return
+        seen.add(key)
+        facts.append(
+            StudentFact(
+                id=f"fact_llm_{len(facts)}",
+                field=field,
+                value=value,
+                status=FactStatus.FACT,
+                source_id="cv_llm",
+                user_confirmed=False,
+            )
+        )
+
+    for project in output.projects:
+        pieces = [project.name.strip(), project.description.strip()]
+        add_experience_fact("project", "：".join(piece for piece in pieces if piece))
+    for publication in output.publications:
+        details = "，".join(
+            piece for piece in (publication.venue.strip(), publication.year.strip()) if piece
+        )
+        title = publication.title.strip()
+        add_experience_fact("publication", f"{title}（{details}）" if details else title)
+
     return StudentProfile(
         student_id=student_id,
         name=output.name.strip() or None,

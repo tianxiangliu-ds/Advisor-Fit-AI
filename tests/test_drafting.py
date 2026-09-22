@@ -1,6 +1,6 @@
 """确定性邮件模板测试。"""
 
-from advisor_fit.llm.drafting import generate_template_draft
+from advisor_fit.llm.drafting import DraftOutput, generate_draft, generate_template_draft
 from advisor_fit.models.common import FactStatus
 from advisor_fit.models.match import SentenceType
 from advisor_fit.models.professor import (
@@ -9,7 +9,7 @@ from advisor_fit.models.professor import (
     ProfessorProfile,
     RecentPublication,
 )
-from advisor_fit.models.student import StudentFact, StudentProfile
+from advisor_fit.models.student import Education, Project, Publication, StudentFact, StudentProfile
 
 
 def _student(name: str = "张三") -> StudentProfile:
@@ -78,3 +78,60 @@ def test_template_mentions_reading_only_when_confirmed():
 
     draft2 = generate_template_draft(_student(), _professor(), paper_read_confirmed=True)
     assert "已阅读" in "".join(s.text for s in draft2.sentences)
+
+
+def test_template_frames_confirmed_abilities_as_a_contribution_plan():
+    """若离线模板仍只机械罗列技能而没有表达可贡献什么，这个测试会失败。"""
+    draft = generate_template_draft(_student(), _professor())
+    full_text = "".join(sentence.text for sentence in draft.sentences)
+
+    assert "从论文复现、实验整理和工程实现等具体工作做起" in full_text
+
+
+def test_template_prefers_the_most_recent_confirmed_paper_for_reading_reference():
+    """邮件不能默认引用多年以前的论文，除非没有更新的已核实成果。"""
+    professor = _professor().model_copy(
+        update={
+            "recent_publications": [
+                RecentPublication(id="old", title="早期论文", year=2021, source_ids=["old_ev"]),
+                RecentPublication(id="new", title="近期论文", year=2025, source_ids=["new_ev"]),
+            ]
+        }
+    )
+
+    draft = generate_template_draft(_student(), professor, paper_read_confirmed=True)
+
+    assert "已阅读您发表的《近期论文》" in "".join(item.text for item in draft.sentences)
+
+
+def test_llm_only_receives_confirmed_student_facts():
+    """若未经确认的结构化经历再次进入模型 payload，这个测试会失败。"""
+
+    class CapturingLLM:
+        payload = None
+
+        def generate(self, *, schema, instructions, payload):
+            self.payload = payload
+            return DraftOutput()
+
+    student = _student().model_copy(
+        update={
+            "education": [Education(degree="未确认学历", institution="未确认学校")],
+            "projects": [Project(name="未确认项目", description="不应发送给模型")],
+            "publications": [Publication(title="未确认论文")],
+        }
+    )
+    llm = CapturingLLM()
+
+    generate_draft(llm, student, _professor(), type("Report", (), {
+        "recommendation": type("Value", (), {"value": "LEARN_MORE"})(),
+        "strengths": [],
+    })())
+
+    assert llm.payload is not None
+    assert "student_education" not in llm.payload
+    assert "student_projects" not in llm.payload
+    assert "student_publications" not in llm.payload
+    assert {fact["id"] for fact in llm.payload["student_facts"]} == {
+        "sk1", "sk2", "int1"
+    }

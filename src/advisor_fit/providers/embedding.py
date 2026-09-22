@@ -95,6 +95,9 @@ class HashingEmbedder:
     """
 
     dim: int = 512
+    # 从别的档降级下来时，记下**为什么**——否则用户配了本机模型却拿到离线档，
+    # 完全看不出原因（实测就是这样：模型没下下来，静默退回了离线档）
+    fallback_reason: str = ""
 
     @property
     def name(self) -> str:
@@ -141,6 +144,10 @@ class ApiEmbedder:
     base_url: str
     api_key: str = ""
     timeout: float = 30.0
+    # 真实服务对一次请求的条数与单条长度都有限制：一次塞几百条会被拒，
+    # 单条过长会撞 token 上限。分批发 + 截断，才能真正"接上就能用"。
+    max_batch: int = 32
+    max_chars: int = 2_000
     _dim: int = 0
 
     @property
@@ -155,23 +162,27 @@ class ApiEmbedder:
     def semantic(self) -> bool:
         return True
 
-    # 真模型的分值尺度明显更高（同义句普遍在 0.6 以上），门槛相应抬高
+    # 门槛按**真实数据**校准，不是拍脑袋：拿 400 位真实导师、四个查询实测
+    # （bge-small-zh-v1.5），相关查询最高 0.51~0.70、中位 0.35~0.40；
+    # 而**一个完全不相关的查询最高也能到 0.468**——这就是噪声下限。
+    # 所以召回门槛取 0.50：相关查询够得着，无关查询够不着。
+    # （原先拍的是 0.60，实测**没有任何一条能到**，功能等于失效。）
     @property
     def reason_threshold(self) -> float:
         return 0.45
 
     @property
     def recall_threshold(self) -> float:
-        return 0.60
+        return 0.50
 
     def _headers(self) -> dict[str, str]:
         # Key 按请求带，**不去改共享 client 的 headers**——那会污染别的请求
         return {"Authorization": f"Bearer {self.api_key}"} if self.api_key else {}
 
-    def embed(self, texts: Sequence[str]) -> list[list[float]]:
+    def _embed_batch(self, texts: Sequence[str]) -> list[list[float]]:
         response = self.client.post(
             f"{self.base_url.rstrip('/')}/embeddings",
-            json={"model": self.model, "input": list(texts)},
+            json={"model": self.model, "input": [t[: self.max_chars] for t in texts]},
             headers=self._headers(),
             timeout=self.timeout,
         )
@@ -179,6 +190,22 @@ class ApiEmbedder:
         payload = response.json()
         rows = sorted(payload.get("data", []), key=lambda item: item.get("index", 0))
         vectors = [_normalise([float(v) for v in row["embedding"]]) for row in rows]
+        if len(vectors) != len(texts):
+            # 条数对不上说明服务返回不完整，宁可整批判失败让调用方降级，
+            # 也不要错位拼接——那会让相似度算在错误的配对上，且完全看不出来
+            raise ValueError(
+                f"向量条数不匹配：请求 {len(texts)} 条，返回 {len(vectors)} 条"
+            )
+        return vectors
+
+    def embed(self, texts: Sequence[str]) -> list[list[float]]:
+        items = list(texts)
+        if not items:
+            return []
+        size = max(1, self.max_batch)
+        vectors: list[list[float]] = []
+        for start in range(0, len(items), size):
+            vectors.extend(self._embed_batch(items[start : start + size]))
         if vectors:
             self._dim = len(vectors[0])
         return vectors
@@ -203,13 +230,14 @@ class LocalModelEmbedder:
     def semantic(self) -> bool:
         return True
 
+    # 与 ApiEmbedder 同一套校准值，理由见上
     @property
     def reason_threshold(self) -> float:
         return 0.45
 
     @property
     def recall_threshold(self) -> float:
-        return 0.60
+        return 0.50
 
     def embed(self, texts: Sequence[str]) -> list[list[float]]:
         raw = self.model.encode(list(texts), normalize_embeddings=True)
@@ -246,8 +274,13 @@ def build_embedder(*, client: Any = None, settings_obj: Any = None) -> Embedder:
             return LocalModelEmbedder(
                 model=SentenceTransformer(local_name), model_name=local_name
             )
-        except Exception:  # noqa: BLE001 - 没装或下不动就退回默认档
-            pass
+        except Exception as exc:  # noqa: BLE001 - 没装或下不动就退回默认档
+            # 退回离线档，但**把原因带上**——静默降级会让人以为"配了却没生效"
+            degraded = HashingEmbedder()
+            degraded.fallback_reason = (
+                f"本机模型「{local_name}」加载失败（{type(exc).__name__}）：{exc}"
+            )
+            return degraded
 
     return HashingEmbedder()
 

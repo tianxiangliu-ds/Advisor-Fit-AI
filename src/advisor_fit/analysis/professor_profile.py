@@ -5,6 +5,7 @@ from __future__ import annotations
 from datetime import UTC, datetime
 
 from advisor_fit.analysis.topics import group_works_by_topic, infer_trend
+from advisor_fit.ingest.manual_professor import professor_identity_key
 from advisor_fit.models.common import Confidence, FactStatus
 from advisor_fit.models.evidence import Evidence
 from advisor_fit.models.professor import (
@@ -44,7 +45,9 @@ def assemble_professor_profile(
     official_ev = _official_evidence_id(evidences)
 
     profile = ProfessorProfile(
-        professor_id=anchor.name or "professor",
+        professor_id=professor_identity_key(
+            anchor.homepage, anchor.institution, anchor.department, anchor.name
+        ),
         identity_confirmed=True,
         name=_fact(anchor.name, official_ev),
         institution=_fact(anchor.institution, official_ev),
@@ -86,6 +89,7 @@ def assemble_professor_profile(
                 abstract=work.abstract,
                 source_url=work.source_url,
                 keywords=work.topics,
+                authors=work.authors,
             )
         )
 

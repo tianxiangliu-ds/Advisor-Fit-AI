@@ -46,6 +46,11 @@ class FakeProvider:
         return []
 
 
+class UnavailableTitleFallback:
+    def search_by_title(self, _title):
+        raise RuntimeError("Crossref offline")
+
+
 class FakeLLM:
     """按顺序返回决策；用于检索循环。"""
 
@@ -304,6 +309,22 @@ def test_research_without_llm_falls_back_to_titles():
     assert any("标题匹配" in p["title"] for p in result.papers)
 
 
+def test_rule_path_keeps_existing_results_when_title_fallback_is_offline():
+    provider = FakeProvider([FakeWork("已有论文", institution="武汉大学")])
+
+    result = research_professor(
+        NullLLM(),
+        provider,
+        name="陆伟",
+        institution="武汉大学",
+        source="zh",
+        seed_titles=["代表论文"],
+        title_fallback=UnavailableTitleFallback(),
+    )
+
+    assert [paper["title"] for paper in result.papers] == ["已有论文"]
+
+
 def test_rule_path_records_real_steps_in_the_trace():
     """没配大模型时，规则路径也要如实记下它调用了什么。
 
@@ -316,7 +337,7 @@ def test_rule_path_records_real_steps_in_the_trace():
     trace = RunTrace(task="t")
     research_professor(
         NullLLM(), provider, name="陆伟", institution="武汉大学", source="zh",
-        seed_titles=["一篇论文"], trace=trace,
+        seed_titles=["一篇论文"], trace=trace, title_fallback=provider,
     )
 
     assert trace.mode == "rule"

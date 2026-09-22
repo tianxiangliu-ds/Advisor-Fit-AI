@@ -117,6 +117,7 @@ def test_entry_sets_data_dir_before_importing_the_app():
     assert import_line is not None, "入口文件没有导入 advisor_fit"
     assert env_line < import_line, "DATA_DIR 必须在导入 advisor_fit 之前设置"
     assert 'os.environ.setdefault("UPLOADS_DIR"' in source
+    assert 'os.environ.setdefault("APP_MODE", "demo")' in source
 
 
 def test_entry_seeds_demo_data_and_runs_the_real_app():

@@ -4,4 +4,4 @@
 界面上显示的就是这个值（见 `app.py` 侧栏与 `scripts/check_version.py`）。
 """
 
-__version__ = "0.2.0"
+__version__ = "0.1.1"

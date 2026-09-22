@@ -56,6 +56,12 @@ def main() -> int:
     print(f"后端：{embedder.name}")
     print(f"是不是真语义：{'是' if embedder.semantic else '否（只做表层相似）'}")
     print(f"理由门槛 {embedder.reason_threshold} ／ 召回门槛 {embedder.recall_threshold}")
+    reason = getattr(embedder, "fallback_reason", "")
+    if reason:
+        print()
+        print(f"⚠ 已从别的档降级到离线档 —— {reason}")
+        print("  本地模型下不动时，可以先用本脚本把文件直接下到项目内：")
+        print("    python scripts/download_local_model.py --model BAAI/bge-small-zh-v1.5")
     if not embedder.semantic:
         print()
         print("提示：当前是内置离线档，它认不出同义词。要真语义，请在 .env 里配置：")

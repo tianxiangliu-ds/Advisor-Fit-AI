@@ -1,5 +1,12 @@
 # 择研 · Advisor-Fit AI
 
+[![CI](https://github.com/tianxiangliu-ds/Advisor-Fit-AI/actions/workflows/ci.yml/badge.svg)](https://github.com/tianxiangliu-ds/Advisor-Fit-AI/actions/workflows/ci.yml)
+![Version](https://img.shields.io/badge/version-v0.1.1-605483)
+![License](https://img.shields.io/badge/license-MIT-54806f)
+
+> **v0.1.1** · 本地优先的导师研究匹配助手。上传简历、核对导师和论文、查看可追溯匹配结论，再生成可编辑的联系邮件草稿。
+> [快速开始](#快速开始) · [在线演示部署](#部署在线-demo) · [已知限制](#已知限制诚实记录)
+
 **面向国内硕博双选 / 套磁的「导师研究匹配助手」——证据驱动、本地优先、每一步都能点开看来源。**
 
 你给它你的简历和一位导师，它去多个免费学术库把这位导师的论文找出来、逐篇核对是不是本人，
@@ -8,7 +15,7 @@
 
 - 🔍 **不编造**：所有结论分「已证实 / 推测 / 未知」三态，没有证据就写"未知"
 - 🧾 **可追溯**：每条进入报告的结论都能点开看到来源链接和抓取时间
-- ✅ **人工门控**：论文归属、学生事实都必须你亲手勾选确认，系统不替你认定
+- ✅ **人工门控**：你保留的学生事实、你确认归属的论文才会进入报告，系统不替你认定
 - 🔒 **本地优先**：简历只在你电脑上解析，数据存在本地 SQLite；不需要联网也能跑完整流程
 - 🆓 **零 Key 起步**：论文检索默认走免费公开学术库，不用申请任何 Key
 
@@ -76,8 +83,8 @@ LLM 决策 ──► 执行工具 ──► 结果回传 ──► 再决策
 |---|---|
 | **✦ 首屏** | 项目入口与流程说明 |
 | **◌ 方向找导师** | 研究方向关键词 → 本地导师库粗筛 → 可解释排序 → 并排比较 → 带入研究 |
-| **Ⅰ 学生事实** | 上传 PDF 简历，逐条编辑/增删/勾选；只有你确认的才进入匹配 |
-| **Ⅱ 导师档案** | 姓名+学校手动填 / 主页链接自动解析 / 从导师库填充；字段缺了不阻断，标「未知」 |
+| **Ⅰ 学生事实** | 上传 PDF 简历，按类别保留、补充或删除事实；保留项才进入匹配 |
+| **Ⅱ 导师档案** | 姓名+学校手动填 / 主页链接自动解析；字段缺了不阻断，标「未知」 |
 | **Ⅲ 论文核验** | Agent 按学科分流检索多个学术库，逐篇消歧，分「匹配 / 需审核 / 疑似同名」 |
 | **Ⅳ 匹配简报** | 研究交集、能力匹配、背景缺口、建议的联系角度 |
 | **Ⅴ 联系邮件** | 每句话绑定"你的某条经历"或"他的某篇论文"，可编辑、可下载，**不会自动发送** |
@@ -115,6 +122,14 @@ uv sync
 ```powershell
 uv sync                                  # 安装依赖
 .\.venv\Scripts\python.exe -m streamlit run app.py
+```
+
+若你使用 VS Code 的终端，也可以先进入虚拟环境，再启动：
+
+```powershell
+cd C:\projects\advisor-fit-ai
+.\.venv\Scripts\Activate.ps1
+python -m streamlit run app.py
 ```
 
 浏览器打开 `http://localhost:8501` 即可。**不需要配置任何 API Key**：
@@ -455,7 +470,7 @@ $PY = ..\advisor-fit-ai\.venv\Scripts\python.exe
 
 ## 版本与更新
 
-- 界面左上角显示当前版本（如 `ADVISOR FIT STUDIO · v0.2.0`）；
+- 界面左上角显示当前版本（如 `ADVISOR FIT STUDIO · v0.1.1`）；
 - 版本号同时写在 `pyproject.toml` 与 `src/advisor_fit/__init__.py`，
   用 `scripts\check_version.py` 检查是否一致（CI 里也会跑）；
 - 改动记录见 `CHANGELOG.md`；

@@ -25,8 +25,29 @@ KIND_LABELS: dict[str, str] = {
 }
 STATUS_LABELS: dict[str, str] = {"ok": "成功", "error": "失败", "skipped": "已跳过"}
 
+_USER_TOOL_LABELS: dict[str, str] = {
+    "search_by_author": "按导师姓名检索论文",
+    "search_by_title": "按论文标题补充检索",
+    "fetch_professor_homepage": "读取导师公开主页",
+    "check_paper_affiliations": "核对论文作者与机构",
+}
+
+_USER_STAGE_LABELS: dict[str, str] = {
+    "seeding": "开始检索",
+    "searching": "扩展来源",
+    "awaiting_confirmation": "等待你确认",
+    "disambiguating": "核对归属",
+    "investigating": "补查履历",
+    "done": "研究完成",
+}
+
 # 单个参数/结果摘要在界面上的最大长度
 _MAX_DETAIL_CHARS = 72
+
+
+def user_tool_label(name: str) -> str:
+    """Translate an internal tool identifier before it reaches the UI."""
+    return _USER_TOOL_LABELS.get(name, "执行补充检索")
 
 
 def format_duration(ms: int) -> str:
@@ -93,7 +114,9 @@ def trace_step_html(step: dict[str, Any]) -> str:
 
     parts = [f"<i>{index}</i>", f"<em>{escape(kind)}</em>"]
     if step.get("name"):
-        parts.append(f"<b>{escape(str(step['name']))}</b>")
+        name = str(step["name"])
+        label = user_tool_label(name) if step.get("kind") == "tool_call" else name
+        parts.append(f"<b>{escape(label)}</b>")
     if step.get("args_digest"):
         parts.append(f"<code>{escape(str(step['args_digest']))}</code>")
     detail = str(step.get("summary") or step.get("error") or "")
@@ -119,6 +142,48 @@ def trace_stages_html(trace: dict[str, Any]) -> str:
         # 最后一个阶段是"当前所处的位置"，用紫色点出来
         parts.append(f"<b>{label}</b>" if index == len(stages) - 1 else label)
     return '<div class="trace-stages">' + " → ".join(parts) + "</div>"
+
+
+def trace_user_steps(trace: dict[str, Any]) -> list[dict[str, str]]:
+    """把内部工具调用翻译成普通用户能理解的研究动作。"""
+    result: list[dict[str, str]] = []
+    for step in trace.get("steps") or []:
+        if step.get("kind") != "tool_call":
+            continue
+        status = str(step.get("status") or "ok")
+        result.append(
+            {
+                "label": user_tool_label(str(step.get("name") or "")),
+                "status": {
+                    "ok": "已完成",
+                    "error": "未成功",
+                    "skipped": "已跳过",
+                }.get(status, status),
+                "detail": str(step.get("summary") or step.get("error") or "")[
+                    :_MAX_DETAIL_CHARS
+                ],
+            }
+        )
+    return result
+
+
+def trace_progress_html(trace: dict[str, Any]) -> str:
+    """用独立阶段卡展示进度，避免一串箭头文字挤在同一行。"""
+    stages = [str(stage) for stage in (trace.get("stages") or [])]
+    if not stages and trace.get("steps"):
+        stages = ["searching", "done"]
+    if not stages:
+        return ""
+    cards: list[str] = []
+    for index, stage in enumerate(stages):
+        state_class = " current" if index == len(stages) - 1 else " done"
+        number = index + 1
+        label = escape(_USER_STAGE_LABELS.get(stage, stage_label(stage)))
+        cards.append(
+            f'<div class="research-stage{state_class}"><i>{number:02d}</i>'
+            f"<span>{label}</span></div>"
+        )
+    return '<div class="research-progress">' + "".join(cards) + "</div>"
 
 
 def trace_panel_html(trace: dict[str, Any]) -> str:

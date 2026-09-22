@@ -55,3 +55,53 @@ def semantic_scores(
 
     query_vector, document_vectors = vectors[0], vectors[1:]
     return [cosine(query_vector, document) for document in document_vectors]
+
+
+def similar_pairs(
+    left: Sequence[str],
+    right: Sequence[str],
+    embedder: Embedder,
+    *,
+    threshold: float | None = None,
+) -> list[tuple[int, int, float]]:
+    """在两组短语之间找"意思相近"的配对。
+
+    用于学生词（技能/兴趣）与导师主题之间：字面没命中、但向量够近的也算交集，
+    只是**证据强度弱于明确的关键词命中**，调用方据此区分（不能混成一种理由）。
+
+    返回 `(left 下标, right 下标, 相似度)`，按相似度从高到低。
+    """
+    if not left or not right:
+        return []
+    limit = embedder.recall_threshold if threshold is None else threshold
+    try:
+        vectors = embedder.embed([*left, *right])
+    except Exception:  # noqa: BLE001 - 向量服务不可用就当作没有语义信号
+        return []
+    if len(vectors) != len(left) + len(right):
+        return []
+
+    left_vectors = vectors[: len(left)]
+    right_vectors = vectors[len(left) :]
+    pairs: list[tuple[int, int, float]] = []
+    for i, left_vector in enumerate(left_vectors):
+        for j, right_vector in enumerate(right_vectors):
+            score = cosine(left_vector, right_vector)
+            if score >= limit:
+                pairs.append((i, j, score))
+    pairs.sort(key=lambda item: -item[2])
+    return pairs
+
+
+def vector_field_label(embedder: Embedder | None) -> str:
+    """向量召回该叫什么字段名。
+
+    真模型才能叫 `semantic`（语义相近）；离线档只做表层重合，只能叫 `surface`
+    （字面相近）。把后者说成"语义理解"是夸大，而夸大恰是这个项目最该避免的事。
+    """
+    return "semantic" if (embedder is not None and embedder.semantic) else "surface"
+
+
+def vector_term_label(embedder: Embedder | None) -> str:
+    """配对里的那条理由该显示成什么词。"""
+    return "意思相近" if vector_field_label(embedder) == "semantic" else "用词相近"

@@ -109,7 +109,34 @@ div[data-testid="stFileUploader"] { background:#fffdf9; border:1px solid var(--l
   padding:15px 18px; display:flex; gap:20px; align-items:center; margin:12px 0 18px; }
 .brief-verdict strong { font:500 1rem "Noto Serif SC",SimSun,serif; color:#36333b; }
 .brief-verdict span { font-size:.81rem; color:#67635d; }
+.brief-section-title { border-top:1px solid var(--line); padding-top:18px; margin:24px 0 12px;
+  color:#36333b; font:500 1.02rem "Noto Serif SC","Songti SC",SimSun,serif; }
+.brief-section-title span { color:var(--gold); font:400 .95rem Georgia,serif;
+  margin-right:14px; }
+.fact-grid { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:12px; }
+.fact-group { background:#fffdf9; border:1px solid var(--line); border-radius:6px;
+  padding:13px 14px; min-height:112px; }
+.fact-group h4 { margin:0 0 10px; color:#847f78; font:500 .72rem Arial,sans-serif;
+  letter-spacing:.14em; }
+.fact-scroll { max-height:190px; overflow-y:auto; padding-right:4px; }
+.fact-chip { display:inline-block; background:#eeeaf5; color:#36333b; border-radius:4px;
+  font-size:.78rem; line-height:1.45; padding:5px 8px; margin:0 6px 6px 0; }
+/* 每个学生事实都保留为紧凑标签；右侧 × 是删除入口，和正文留有间距。 */
+[class*="st-key-fact_del_"] button { min-height:0; padding:5px 8px;
+  background:#eeeaf5; border:0; border-radius:4px; color:#36333b; font-size:.78rem;
+  line-height:1.45; text-align:left; box-shadow:none; }
+[class*="st-key-fact_del_"] button:hover { background:#e3dced; color:#433866; }
 /* --- Agent 运行轨迹（见 design.md 4.10）--- */
+.research-progress { display:grid; grid-template-columns:repeat(4,minmax(0,1fr));
+  gap:9px; margin:4px 0 14px; }
+.research-stage { display:flex; align-items:center; gap:10px; background:#fffdf9;
+  border:1px solid var(--line); border-radius:6px; padding:12px 14px;
+  color:#777975; font-size:.79rem; }
+.research-stage i { font:400 .85rem Georgia,serif; font-style:normal; color:#a2a09b; }
+.research-stage.done { border-color:#54806f; color:#54806f; }
+.research-stage.done i { color:#54806f; }
+.research-stage.current { border-color:#605483; color:#605483; background:#eeeaf5; }
+.research-stage.current i { color:#605483; }
 .trace-panel { background:#fffdf9; border:1px solid var(--line); border-radius:6px;
   box-shadow:none; overflow:hidden; margin:4px 0 18px; }
 .trace-task { padding:13px 18px; border-bottom:1px solid var(--line);
@@ -135,6 +162,8 @@ div[data-testid="stFileUploader"] { background:#fffdf9; border:1px solid var(--l
 .trace-degraded { border-top:2px solid #a8543f; background:#f5f0e9;
   padding:12px 18px; font-size:.8rem; color:#67635d; }
 @media(max-width:900px) { .block-container { padding:2rem 1.2rem 4rem; }
-  .landing-hero .orb { opacity:.25; right:2%; } }
+  .landing-hero .orb { opacity:.25; right:2%; }
+  .research-progress { grid-template-columns:1fr; }
+  .fact-grid { grid-template-columns:1fr; } }
 </style>
 """

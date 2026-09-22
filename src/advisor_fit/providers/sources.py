@@ -114,6 +114,35 @@ DEFAULT_SOURCES: tuple[SourceSpec, ...] = (
         note="中文期刊与会议；需要在 .env 配置 WANFANG_APP_KEY 后启用",
     ),
     SourceSpec(
+        key="scopus",
+        label="Scopus · 国际引文库",
+        rank=8,
+        language="en",
+        requires_key="scopus_api_key",
+        min_interval_seconds=0.5,
+        note="作者与文献检索；需要 SCOPUS_API_KEY 和对应的 Elsevier 访问权限",
+    ),
+    SourceSpec(
+        key="springer_meta",
+        label="Springer Nature · 元数据",
+        rank=35,
+        language="en",
+        requires_key="springer_meta_api_key",
+        min_interval_seconds=1.0,
+        supports_author_search=False,
+        note="出版社范围内的题名与元数据补充，不是全学科作者检索库",
+    ),
+    SourceSpec(
+        key="springer_open_access",
+        label="Springer Nature · 开放获取",
+        rank=36,
+        language="en",
+        requires_key="springer_open_access_api_key",
+        min_interval_seconds=1.0,
+        supports_author_search=False,
+        note="Springer Nature 开放获取内容的题名补充，不是全学科作者检索库",
+    ),
+    SourceSpec(
         key="aminer",
         label="AMiner · 中文与学者画像",
         disciplines=ALL_DISCIPLINES,
@@ -249,4 +278,3 @@ def classify_sources(
 
     selected.sort(key=lambda spec: (spec.rank, spec.key))
     return selected, notes
-

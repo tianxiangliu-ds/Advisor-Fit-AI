@@ -154,10 +154,11 @@ def test_rule_path_records_the_stages_it_actually_goes_through():
     from tests.test_research import FakeProvider, FakeWork
 
     trace = RunTrace(task="t")
+    provider = FakeProvider([FakeWork("一篇论文", institution="武汉大学")])
     research_professor(
-        NullLLM(), FakeProvider([FakeWork("一篇论文", institution="武汉大学")]),
+        NullLLM(), provider,
         name="陆伟", institution="武汉大学", source="zh",
-        seed_titles=["一篇论文"], trace=trace,
+        seed_titles=["一篇论文"], trace=trace, title_fallback=provider,
     )
 
     assert trace.stages[0] == str(Stage.SEEDING)

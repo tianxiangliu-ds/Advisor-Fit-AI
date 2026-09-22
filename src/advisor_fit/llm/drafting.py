@@ -12,6 +12,15 @@ from advisor_fit.models.student import StudentProfile
 _DRAFT_INSTRUCTIONS = prompt_text("drafting")
 
 
+def _recent_publications(professor: ProfessorProfile) -> list:
+    """Newest evidence comes first; an unknown year never outranks a dated paper."""
+    return sorted(
+        (publication for publication in professor.recent_publications if publication.source_ids),
+        key=lambda publication: publication.year or 0,
+        reverse=True,
+    )
+
+
 class DraftOutput(BaseModel):
     subject: str = ""
     sentences: list[DraftSentence] = []
@@ -30,24 +39,6 @@ def generate_draft(
             {"id": f.id, "field": f.field, "value": f.value}
             for f in student.draftable_facts()
         ],
-        "student_education": [
-            {
-                "degree": e.degree,
-                "institution": e.institution,
-                "major": e.major,
-                "start_year": e.start_year,
-                "end_year": e.end_year,
-            }
-            for e in student.education
-        ],
-        "student_projects": [
-            {"name": p.name, "description": p.description, "role": p.role}
-            for p in student.projects
-        ],
-        "student_publications": [
-            {"title": p.title, "venue": p.venue, "year": p.year}
-            for p in student.publications
-        ],
         "professor_name": professor.name.value or professor.professor_id or "老师",
         "professor_topics": [
             {"topic": t.topic, "evidence_ids": t.evidence_ids}
@@ -61,12 +52,13 @@ def generate_draft(
                 "abstract": (p.abstract or "")[:200],
                 "source_ids": p.source_ids,
             }
-            for p in professor.recent_publications
+            for p in _recent_publications(professor)
         ],
         "recommendation": match_report.recommendation.value,
         "strengths": [
             {
                 "label": d.label,
+                "summary": d.summary,
                 "student_fact_ids": d.student_fact_ids,
                 "professor_evidence_ids": d.professor_evidence_ids,
             }
@@ -123,6 +115,14 @@ def generate_template_draft(
             )
         )
 
+    if skills or interests:
+        sentences.append(
+            DraftSentence(
+                text="如果有机会进一步参与课题，我愿意从论文复现、实验整理和工程实现等具体工作做起。",
+                sentence_type="GENERIC",
+            )
+        )
+
     all_topics = [*professor.observed_recent_topics, *professor.declared_interests]
     topics = [t for t in all_topics if t.evidence_ids][:3]
     if topics:
@@ -133,7 +133,7 @@ def generate_template_draft(
                 evidence_ids=[ev for t in topics for ev in t.evidence_ids],
             )
         )
-    publications = [p for p in professor.recent_publications if p.source_ids][:3]
+    publications = _recent_publications(professor)[:3]
     if publications:
         sentences.append(
             DraftSentence(

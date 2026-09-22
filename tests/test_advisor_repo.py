@@ -107,6 +107,22 @@ def test_search_by_university_and_department(tmp_path):
     assert repo.search("不存在大学") == []
 
 
+def test_lookup_by_homepage_identity_key_requires_exact_homepage_match(tmp_path):
+    """主页身份标识命中后才能把本地库资料用于导师档案。"""
+    from advisor_fit.ingest.manual_professor import professor_identity_key
+
+    repo = AdvisorRepository(tmp_path / "advisors.db")
+    advisor = _base(homepage_url="https://cs.whu.edu.cn/info/1001/88.htm")
+    repo.upsert(advisor, source="official")
+
+    key = professor_identity_key(advisor.homepage_url, "", "", "")
+    found = repo.lookup_by_identity_key(key)
+
+    assert found is not None
+    assert found.name == "陆伟"
+    assert repo.lookup_by_identity_key("homepage:https://example.edu/no-match") is None
+
+
 def test_reviews_are_stored_separately(tmp_path):
     repo = AdvisorRepository(tmp_path / "advisors.db")
     repo.import_reviews(

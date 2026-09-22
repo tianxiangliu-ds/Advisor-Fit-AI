@@ -164,6 +164,98 @@ def test_non_http_scheme_is_rejected():
     assert result.outcome == "UNSAFE_URL"
 
 
+def test_private_network_target_is_rejected_before_any_request():
+    calls = []
+
+    def handler(request):
+        calls.append(str(request.url))
+        return httpx.Response(200, text="不应该被请求")
+
+    fetcher = Fetcher(
+        client=httpx.Client(transport=httpx.MockTransport(handler)),
+        robots_loader=lambda _url: True,
+        address_resolver=lambda _host: ["127.0.0.1"],
+    )
+    result = fetcher.fetch("http://internal.example/admin")
+
+    assert result.outcome == "UNSAFE_URL"
+    assert "公网" in result.error
+    assert calls == []
+
+
+def test_ipv6_loopback_is_rejected():
+    fetcher = Fetcher(
+        client=httpx.Client(transport=httpx.MockTransport(lambda _: httpx.Response(200))),
+        robots_loader=lambda _url: True,
+    )
+
+    assert fetcher.fetch("http://[::1]/admin").outcome == "UNSAFE_URL"
+
+
+def test_domain_is_rejected_if_any_resolved_address_is_private():
+    fetcher = Fetcher(
+        client=httpx.Client(transport=httpx.MockTransport(lambda _: httpx.Response(200))),
+        robots_loader=lambda _url: True,
+        address_resolver=lambda _host: ["93.184.216.34", "10.0.0.8"],
+    )
+
+    assert fetcher.fetch("https://mixed.example/profile").outcome == "UNSAFE_URL"
+
+
+def test_url_with_embedded_credentials_is_rejected():
+    fetcher = Fetcher(
+        client=httpx.Client(transport=httpx.MockTransport(lambda _: httpx.Response(200))),
+        robots_loader=lambda _url: True,
+        address_resolver=lambda _host: ["93.184.216.34"],
+    )
+
+    result = fetcher.fetch("https://user:password@example.com/profile")
+
+    assert result.outcome == "UNSAFE_URL"
+
+
+def test_redirect_to_private_network_is_rejected():
+    calls = []
+
+    def handler(request):
+        calls.append(str(request.url))
+        return httpx.Response(
+            302,
+            headers={"Location": "http://169.254.169.254/latest/meta-data"},
+        )
+
+    fetcher = Fetcher(
+        client=httpx.Client(transport=httpx.MockTransport(handler)),
+        robots_loader=lambda _url: True,
+        address_resolver=lambda _host: ["93.184.216.34"],
+    )
+    result = fetcher.fetch("https://example.com/profile")
+
+    assert result.outcome == "UNSAFE_URL"
+    assert calls == ["https://example.com/profile"]
+
+
+def test_public_redirect_is_checked_and_followed():
+    calls = []
+
+    def handler(request):
+        calls.append(str(request.url))
+        if request.url.host == "example.com":
+            return httpx.Response(302, headers={"Location": "https://faculty.example.edu/p"})
+        return httpx.Response(200, text="导师主页")
+
+    fetcher = Fetcher(
+        client=httpx.Client(transport=httpx.MockTransport(handler)),
+        robots_loader=lambda _url: True,
+        address_resolver=lambda _host: ["93.184.216.34"],
+    )
+    result = fetcher.fetch("https://example.com/profile")
+
+    assert result.outcome == "OK"
+    assert result.final_url == "https://faculty.example.edu/p"
+    assert calls == ["https://example.com/profile", "https://faculty.example.edu/p"]
+
+
 def test_robots_is_looked_up_once_per_host():
     lookups = []
 

@@ -1,14 +1,14 @@
 {
-  "generated_at": "2026-09-20 23:50:10",
+  "generated_at": "2026-09-21 10:11:37",
   "metrics": [
     {
       "key": "disambig.precision",
       "label": "消歧准确率（规则基线，观察值）",
-      "value": 0.46601941747572817,
+      "value": 0.5416666666666666,
       "unit": "%",
       "higher_is_better": true,
       "gate": null,
-      "detail": "11 位导师 / tp=48 fp=55 fn=0",
+      "detail": "17 位导师 / tp=65 fp=55 fn=0",
       "passed": true
     },
     {
@@ -18,17 +18,17 @@
       "unit": "%",
       "higher_is_better": true,
       "gate": 0.9,
-      "detail": "11 位导师 / tp=48 fp=55 fn=0",
+      "detail": "17 位导师 / tp=65 fp=55 fn=0",
       "passed": true
     },
     {
       "key": "disambig.f1",
       "label": "消歧 F1（规则基线，观察值）",
-      "value": 0.6357615894039735,
+      "value": 0.7027027027027027,
       "unit": "%",
       "higher_is_better": true,
       "gate": null,
-      "detail": "11 位导师 / tp=48 fp=55 fn=0",
+      "detail": "17 位导师 / tp=65 fp=55 fn=0",
       "passed": true
     },
     {
@@ -38,13 +38,13 @@
       "unit": "%",
       "higher_is_better": true,
       "gate": 1.0,
-      "detail": "3/3 条与金标一致",
+      "detail": "25/25 条与金标一致",
       "passed": true
     },
     {
       "key": "claims.unsupported_detected",
       "label": "无证据声明被拦下数",
-      "value": 2.0,
+      "value": 13.0,
       "unit": "count",
       "higher_is_better": true,
       "gate": null,
@@ -94,7 +94,7 @@
     {
       "key": "library.advisors",
       "label": "导师库条目",
-      "value": 30116.0,
+      "value": 30174.0,
       "unit": "count",
       "higher_is_better": true,
       "gate": null,
@@ -124,7 +124,7 @@
     {
       "key": "library.field_fill_rate",
       "label": "导师库字段有值率",
-      "value": 0.2632155664762917,
+      "value": 0.26539404785576987,
       "unit": "%",
       "higher_is_better": true,
       "gate": null,

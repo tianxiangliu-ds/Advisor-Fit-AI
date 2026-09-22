@@ -102,7 +102,14 @@ def fetch_html(url: str, *, client: httpx.Client | None = None, timeout: float =
 
 
 def fetch_html_rendered(url: str, *, timeout: float = 30.0) -> str:
-    """用 Playwright 渲染 JS 页面后取 HTML（需安装 playwright + chromium）。"""
+    """用 Playwright 渲染 JS 页面后取 HTML（需安装 playwright + chromium）。
+
+    为什么不用 `wait_until="networkidle"`：高校页面常带统计脚本、轮播图、轮询请求，
+    网络永远不会"空闲"，于是每次渲染都等到超时报错——实测结果是浏览器兜底从来没成功过
+    （所有采集日志里"经浏览器渲染取得"出现 0 次，而"可能是 JS 动态渲染"有 12 次）。
+    改成"DOM 就绪后固定等一小会儿"，让前端脚本把名单渲染出来；
+    即使 goto 超时，也尽量把当前 DOM 取出来，而不是直接抛错放弃。
+    """
     try:
         from playwright.sync_api import sync_playwright
     except Exception as exc:  # noqa: BLE001 - 未安装 Playwright
@@ -110,13 +117,19 @@ def fetch_html_rendered(url: str, *, timeout: float = 30.0) -> str:
             "需要安装 playwright：pip install playwright && playwright install chromium"
         ) from exc
 
+    settle_ms = 2500
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=True)
-        page = browser.new_page(user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64)")
-        page.goto(url, wait_until="networkidle", timeout=timeout * 1000)
-        html = page.content()
-        browser.close()
-    return html
+        try:
+            page = browser.new_page(user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64)")
+            try:
+                page.goto(url, wait_until="domcontentloaded", timeout=timeout * 1000)
+            except Exception:  # noqa: BLE001 - 超时也继续，先看当前 DOM 里有什么
+                pass
+            page.wait_for_timeout(settle_ms)
+            return page.content()
+        finally:
+            browser.close()
 
 
 def _faculty_id(university: str, college: str, name: str, homepage_url: str) -> str:

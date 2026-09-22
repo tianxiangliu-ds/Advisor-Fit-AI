@@ -79,6 +79,7 @@ class RecentPublication(BaseModel):
     abstract: str = ""
     source_url: str | None = None
     keywords: list[str] = []
+    authors: list[str] = []
 
 
 class Recruiting(BaseModel):

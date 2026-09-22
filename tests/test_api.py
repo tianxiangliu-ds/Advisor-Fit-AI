@@ -242,6 +242,29 @@ def test_run_research_is_usable_without_any_web_layer():
     assert outcome.health == {"total": 1, "searched": 1, "failed": 0, "failed_labels": []}
 
 
+def test_research_request_prefers_the_correction_institution():
+    """若纠错机构仍被原学校覆盖，这个测试会失败。"""
+    request = ResearchRequest(
+        name="王老师",
+        institution="原任职单位",
+        alternate_institution="清华大学",
+    )
+
+    assert request.effective_institution == "清华大学"
+
+
+def test_research_request_includes_department_in_deterministic_routing_hints():
+    """院系是无需模型参与的检索分流依据，不能在进入研究页后丢失。"""
+    request = ResearchRequest(
+        name="许永超",
+        institution="武汉大学",
+        department="计算机学院",
+        known_directions=["计算机视觉"],
+    )
+
+    assert request.routing_hints == ["计算机学院", "计算机视觉"]
+
+
 @pytest.mark.parametrize("source", ["auto", "zh", "en"])
 def test_research_accepts_every_source_mode(source):
     provider = FakeProvider([FakeWork("一篇论文", institution="武汉大学")])

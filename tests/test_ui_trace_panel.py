@@ -48,7 +48,7 @@ def _markdown_text(app: AppTest) -> str:
 def test_no_trace_panel_before_any_run(tmp_path, monkeypatch):
     app = _open_papers_page(tmp_path, monkeypatch)
     assert not app.exception
-    assert "AGENT TRACE" not in _markdown_text(app)
+    assert "本次研究过程" not in _markdown_text(app)
 
 
 def test_trace_panel_appears_with_steps_and_overview(tmp_path, monkeypatch):
@@ -56,9 +56,10 @@ def test_trace_panel_appears_with_steps_and_overview(tmp_path, monkeypatch):
     assert not app.exception
 
     rendered = _markdown_text(app)
-    assert "AGENT TRACE / 本次 Agent 运行轨迹" in rendered
-    assert "trace-panel" in rendered
-    assert "search_by_author" in rendered
+    assert "RESEARCH PROCESS / 本次研究过程" in rendered
+    assert "按导师姓名检索论文" in rendered
+    assert "research-progress" in rendered
+    assert "search_by_author" not in rendered
     assert "papers=25" in rendered
     # 概览行的六个数字
     for label in ("STEPS", "TOOLS", "TOOL CALLS", "ELAPSED", "TOKENS", "NETWORK"):
@@ -119,6 +120,5 @@ def test_history_record_replays_its_agent_trace(tmp_path, monkeypatch):
     assert not app.exception
 
     rendered = _markdown_text(app)
-    assert "AGENT TRACE / 本次 Agent 运行轨迹" in rendered
+    assert "RESEARCH PROCESS / 本次研究过程" in rendered
     assert "示例轨迹，非真实运行" in rendered
-

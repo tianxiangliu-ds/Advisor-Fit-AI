@@ -84,3 +84,9 @@ def test_llm_cv_extracts_structured_experience():
     assert profile.education[0].institution == "武汉大学"
     assert profile.projects[0].name == "政策文本抽取"
     assert profile.publications[0].title == "某论文"
+    assert ("project", "政策文本抽取：基于大模型") in {
+        (fact.field, fact.value) for fact in profile.facts
+    }
+    assert ("publication", "某论文（某期刊，2025）") in {
+        (fact.field, fact.value) for fact in profile.facts
+    }

@@ -339,10 +339,16 @@ def run_all(root: Path, *, llm=None, include_llm: bool = False) -> EvalReport:
             for m in llm_metrics
         )
     else:
-        report.skipped.append({
-            "key": "llm.disambig",
-            "reason": "未配置 LLM_API_KEY，真实模型消歧评测跳过（规则基线已跑）",
-        })
+        # 把"为什么没跑"说准：是压根没配 Key，还是这次没加 --with-llm。
+        # 两种情况的处理方式完全不同，含糊其辞会让人以为配置坏了。
+        from advisor_fit.services.research import llm_configured  # noqa: PLC0415
+
+        reason = (
+            "本次未加 --with-llm，真实模型消歧评测跳过（规则基线已跑）"
+            if llm_configured()
+            else "未配置 LLM_API_KEY，真实模型消歧评测跳过（规则基线已跑）"
+        )
+        report.skipped.append({"key": "llm.disambig", "reason": reason})
     return report
 
 

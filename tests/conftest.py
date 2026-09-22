@@ -17,14 +17,19 @@ FIXTURES_DIR = Path(__file__).parent / "fixtures"
 
 @pytest.fixture(autouse=True)
 def _tests_are_offline(monkeypatch):
-    """测试必须离线：默认清空 LLM Key，避免用例意外调用真实 API。
+    """测试必须离线：默认清空模型配置，避免用例意外调用外部或本地模型。
 
     背景：一旦 .env 里配了 LLM_API_KEY，走完整流程的用例会真的去请求大模型，
-    导致超时、变慢、结果不确定。需要测试真实调用的地方请显式传 api_key。
+    配了本地 embedding 模型时也会在页面测试中加载整套模型；两者都会导致超时、
+    变慢、结果不确定。需要测试真实调用的地方请显式传入对应配置。
     """
     monkeypatch.setattr(settings, "llm_api_key", "")
     monkeypatch.setattr(settings, "llm_base_url", "")
     monkeypatch.setattr(settings, "llm_model", "")
+    monkeypatch.setattr(settings, "embedding_base_url", "")
+    monkeypatch.setattr(settings, "embedding_api_key", "")
+    monkeypatch.setattr(settings, "embedding_model", "")
+    monkeypatch.setattr(settings, "embedding_local_model", "")
 
 
 @pytest.fixture

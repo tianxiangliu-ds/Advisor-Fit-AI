@@ -96,6 +96,15 @@ def test_keyword_overlap_without_project_evidence_is_not_strong():
     assert report.recommendation != Recommendation.WORTH_CONTACTING
 
 
+def test_strength_summary_names_the_actual_student_and_professor_terms():
+    """若强项再次退回“命中 1 项”这种机械文案，这个测试会失败。"""
+    report = build_match_report(_strong_student(), _professor())
+    topic = next(item for item in report.dimensions if item.key == "research_topic")
+
+    assert "信息检索" in topic.summary
+    assert "技能命中 1 项" not in topic.summary
+
+
 def test_unconfirmed_student_is_insufficient():
     student = StudentProfile(
         student_id="s1",

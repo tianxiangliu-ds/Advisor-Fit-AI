@@ -13,6 +13,7 @@ from advisor_fit.llm.analysis import (
     generate_deep_analysis,
     generate_direction_summary,
     sanitize_analysis,
+    sanitize_direction_summary,
 )
 from advisor_fit.llm.claims import generate_and_validate_claims
 from advisor_fit.llm.drafting import generate_draft
@@ -80,6 +81,7 @@ def run_manual_pipeline(
     repository: Repository,
     run_id: str | None = None,
     paper_read_confirmed: bool = False,
+    embedder=None,
 ) -> PipelineResult:
     run_id = run_id or repository.create_run()
     prefix = run_id.replace("-", "")[:10]
@@ -91,15 +93,14 @@ def run_manual_pipeline(
     professor = assemble_professor_profile(
         materials.anchor, materials.works, materials.evidences
     ).model_copy(update={"professor_id": f"professor_{prefix}"})
-    match_report = build_match_report(student, professor)
+    match_report = build_match_report(student, professor, embedder=embedder)
     evidence_map = {evidence.id: evidence for evidence in materials.evidences}
     deep_analysis = sanitize_analysis(
         generate_deep_analysis(llm, student, professor), student, evidence_map
     )
-    direction_summary = generate_direction_summary(llm, professor)
-    direction_summary.evidence_ids = [
-        eid for eid in direction_summary.evidence_ids if eid in evidence_map
-    ]
+    direction_summary = sanitize_direction_summary(
+        generate_direction_summary(llm, professor), set(evidence_map)
+    )
 
     claims = generate_and_validate_claims(llm, {"evidences": evidence_map})
     claim_validation = validate_claims(claims, evidence_map)
@@ -119,6 +120,15 @@ def run_manual_pipeline(
     repository.save_professor_profile(run_id, professor)
     repository.save_match(run_id, match_report)
     repository.save_draft(run_id, draft)
+    repository.save_artifact(
+        run_id, "deep_analysis", deep_analysis, artifact_id=f"{run_id}:deep_analysis"
+    )
+    repository.save_artifact(
+        run_id,
+        "direction_summary",
+        direction_summary,
+        artifact_id=f"{run_id}:direction_summary",
+    )
     for claim in claims:
         repository.save_claim(run_id, claim)
     repository.set_run_status(run_id, "COMPLETED")

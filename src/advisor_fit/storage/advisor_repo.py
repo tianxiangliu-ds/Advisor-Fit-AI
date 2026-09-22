@@ -18,6 +18,7 @@ from contextlib import closing
 from datetime import UTC, datetime
 from pathlib import Path
 
+from advisor_fit.ingest.manual_professor import professor_identity_key
 from advisor_fit.models.advisor import ENRICHABLE_FIELDS, Advisor, merge_into
 
 _SCHEMA = """
@@ -138,6 +139,24 @@ class AdvisorRepository:
                 (university, department, name),
             ).fetchone()
         return self._row_to_advisor(row) if row else None
+
+    def lookup_by_identity_key(self, identity_key: str) -> Advisor | None:
+        """Find one cached advisor only when its homepage-derived key is exact.
+
+        A name or a department alone is not enough here: this lookup enriches a
+        profile that already came from a professor page, so accepting a fuzzy
+        same-name result would be worse than returning nothing.
+        """
+        with closing(self._connect()) as conn:
+            rows = conn.execute(
+                "SELECT * FROM advisors WHERE homepage_url <> ''"
+            ).fetchall()
+        for row in rows:
+            advisor = self._row_to_advisor(row)
+            candidate_key = professor_identity_key(advisor.homepage_url, "", "", "")
+            if candidate_key == identity_key:
+                return advisor
+        return None
 
     def upsert(self, advisor: Advisor, *, source: str) -> Advisor:
         """写入一位导师：已存在则只补空字段，不覆盖已有值。"""

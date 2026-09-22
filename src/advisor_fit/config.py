@@ -29,11 +29,17 @@ class Settings(BaseSettings):
     llm_base_url: str = ""  # 留空则用 provider 默认地址
     llm_model: str = ""      # 留空则用 provider 默认模型
     llm_store: bool = False
+    app_mode: str = "local"  # local | demo
 
     # 可选：中文库（万方）。不配也能检索，默认主干是免费免 Key 的国际学术库。
     wanfang_app_key: str = ""
     # 可选：AMiner 开放平台 Token（按次计费，默认在检索源表里关闭）
     aminer_api_key: str = ""
+    # 可选：Scopus 文献与作者检索（需要 Elsevier API Key / 对应访问权限）
+    scopus_api_key: str = ""
+    # 可选：Springer Nature 出版社范围内的元数据与开放获取补充。
+    springer_meta_api_key: str = ""
+    springer_open_access_api_key: str = ""
     # 可选：进入 OpenAlex / Crossref 的「礼貌池」用的联系邮箱，留空也能用
     contact_email: str = ""
 

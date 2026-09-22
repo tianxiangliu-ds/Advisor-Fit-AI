@@ -12,7 +12,7 @@ from __future__ import annotations
 import re
 import uuid
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel
 from pypdf import PdfReader
@@ -24,6 +24,14 @@ from advisor_fit.models.student import StudentFact, StudentProfile
 class ParsedDocument(BaseModel):
     text: str = ""
     page_count: int = 0
+    warnings: list[str] = []
+
+
+class PdfExtraction(BaseModel):
+    """PDF extraction text together with the parser that actually produced it."""
+
+    text: str = ""
+    engine: Literal["docling", "pypdf"] = "pypdf"
     warnings: list[str] = []
 
 
@@ -98,21 +106,35 @@ def extract_pdf_text(path: Path | str) -> ParsedDocument:
     return ParsedDocument(text=text, page_count=len(reader.pages), warnings=warnings)
 
 
-def extract_pdf_markdown(path: Path | str) -> str:
-    """用 docling 将 PDF 转为 Markdown；docling 不可用时降级为 pypdf 纯文本。"""
-    path = Path(path)
+def _docling_markdown(path: Path) -> str | None:
+    """Return layout-aware Markdown when Docling is available and succeeds."""
     try:
         from docling.document_converter import DocumentConverter
     except Exception:  # noqa: BLE001 - docling 为可选增强，缺失时走 pypdf
-        return extract_pdf_text(path).text
+        return None
     try:
         result = DocumentConverter().convert(str(path))
         markdown = result.document.export_to_markdown()
         if markdown and markdown.strip():
             return markdown.strip()
     except Exception:  # noqa: BLE001 - docling 解析失败时降级
-        pass
-    return extract_pdf_text(path).text
+        return None
+    return None
+
+
+def extract_pdf_content(path: Path | str) -> PdfExtraction:
+    """Extract a PDF and report whether Docling or pypdf produced the text."""
+    path = Path(path)
+    markdown = _docling_markdown(path)
+    if markdown:
+        return PdfExtraction(text=markdown, engine="docling")
+    parsed = extract_pdf_text(path)
+    return PdfExtraction(text=parsed.text, engine="pypdf", warnings=parsed.warnings)
+
+
+def extract_pdf_markdown(path: Path | str) -> str:
+    """用 Docling 将 PDF 转为 Markdown；不可用时降级为 pypdf 纯文本。"""
+    return extract_pdf_content(path).text
 
 
 def redact_pii(text: str, name: str | None = None) -> RedactedText:
@@ -176,6 +198,51 @@ _SKILL_TOKENS = [
     "信息检索",
     "BM25",
 ]
+
+FACT_FIELD_LABELS = {
+    "skill": "技能能力",
+    "degree": "学历背景",
+    "institution": "学校机构",
+    "interest": "研究兴趣",
+    "project": "项目经历",
+    "publication": "科研成果",
+}
+
+_SECTION_FACT_HEADERS = {
+    "project": ("项目经历", "项目经验", "项目实践", "项目内容", "项目介绍"),
+    "publication": ("科研成果", "学术成果", "发表论文", "论文成果", "论文发表", "代表论文"),
+}
+_SECTION_BOUNDARIES = (
+    "教育背景", "教育经历", "工作经历", "实习经历", "技能", "专业技能", "获奖",
+    "自我评价", "个人评价", "联系方式", "校园经历", "社会实践", "证书",
+    *_SECTION_FACT_HEADERS["project"], *_SECTION_FACT_HEADERS["publication"],
+)
+
+
+def _section_facts(text: str, field: str) -> list[str]:
+    """Read short, explicit CV sections when an LLM is unavailable.
+
+    PDF text extraction is not a full CV understanding system.  This conservative
+    fallback only takes non-empty lines immediately below common section headings,
+    stopping at the next known heading, so a project or paper listed in the CV is
+    available for user review instead of being silently omitted.
+    """
+    values: list[str] = []
+    headers = _SECTION_FACT_HEADERS[field]
+    active = False
+    for raw_line in text.splitlines():
+        line = raw_line.strip().lstrip("#•·-— ").strip()
+        if not line:
+            continue
+        if any(header in line for header in headers):
+            active = True
+            continue
+        if active and any(header in line for header in _SECTION_BOUNDARIES):
+            active = False
+            continue
+        if active and len(line) >= 4:
+            values.append(line)
+    return list(dict.fromkeys(values))[:5]
 
 
 def build_student_profile(document: ParsedDocument) -> StudentProfile:
@@ -241,6 +308,20 @@ def build_student_profile(document: ParsedDocument) -> StudentProfile:
                 )
                 i += 1
 
+    for field in ("project", "publication"):
+        for value in _section_facts(text, field):
+            facts.append(
+                StudentFact(
+                    id=f"fact_{i}",
+                    field=field,
+                    value=value,
+                    status=FactStatus.FACT,
+                    source_id="cv",
+                    user_confirmed=False,
+                )
+            )
+            i += 1
+
     return StudentProfile(student_id="student_1", name=extract_name_rule(text), facts=facts)
 
 
@@ -261,7 +342,9 @@ def apply_fact_edits(
                 value=value,
                 status=FactStatus.FACT,
                 source_id="cv_or_user_edit",
-                user_confirmed=bool(row.get("confirmed", False)),
+                # 编辑器里保留下来的非空行即为学生明确保留的真实事实；
+                # 删除才是不使用该事实的唯一操作，避免“取消勾选”和“删除”语义重复。
+                user_confirmed=True,
             )
         )
     return profile.model_copy(update={"facts": facts})

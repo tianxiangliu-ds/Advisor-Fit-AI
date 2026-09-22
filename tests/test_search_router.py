@@ -386,3 +386,67 @@ def test_default_registry_ships_free_sources_and_keeps_paid_ones_off():
     # DBLP 目前被反爬拦下，默认关闭但保留配置入口
     assert by_key["dblp"].enabled is False
     assert by_key["dblp"].disciplines == ("cs",)
+
+
+def test_optional_scopus_and_springer_sources_require_their_own_keys():
+    """新增来源未配 Key 时必须跳过；配好后才可进入路由选择。"""
+    selected, notes = classify_sources("cs", specs=DEFAULT_SOURCES, key_values={})
+    selected_keys = {source.key for source in selected}
+    note_reasons = {source.key: reason for source, reason in notes}
+
+    assert "scopus" not in selected_keys
+    assert note_reasons["scopus"] == "no_key"
+    assert note_reasons["springer_meta"] == "no_key"
+
+    selected, _ = classify_sources(
+        "cs",
+        specs=DEFAULT_SOURCES,
+        key_values={"scopus_api_key": "configured", "springer_meta_api_key": "configured"},
+    )
+    assert {source.key for source in selected} >= {"scopus", "springer_meta"}
+
+
+def test_router_uses_scopus_only_when_its_key_is_configured():
+    specs = (
+        SourceSpec(
+            key="scopus",
+            label="Scopus",
+            requires_key="scopus_api_key",
+            min_interval_seconds=0.0,
+        ),
+    )
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith("/author"):
+            return httpx.Response(
+                200,
+                json={
+                    "search-results": {
+                        "entry": [
+                            {
+                                "dc:identifier": "AUTHOR_ID:42",
+                                "preferred-name": {"given-name": "Wei", "surname": "Wang"},
+                                "affiliation-current": {"affiliation-name": "Wuhan University"},
+                            }
+                        ]
+                    }
+                },
+            )
+        return httpx.Response(
+            200,
+            json={"search-results": {"entry": [{"eid": "x", "dc:title": "A work"}]}},
+        )
+
+    router = SearchRouter(
+        specs=specs,
+        key_values={"scopus_api_key": "configured"},
+        clients={"scopus": httpx.Client(transport=httpx.MockTransport(handler))},
+        sleeper=lambda _seconds: None,
+    )
+    works = router.search_publications(
+        "王伟", english_name="Wei Wang", institution="Wuhan University"
+    )
+
+    assert [work.title for work in works] == ["A work"]
+    assert router.outcomes[0].key == "scopus"
+    assert router.outcomes[0].status == "ok"

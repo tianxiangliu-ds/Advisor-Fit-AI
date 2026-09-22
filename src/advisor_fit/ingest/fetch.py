@@ -18,11 +18,13 @@
 from __future__ import annotations
 
 import hashlib
+import ipaddress
+import socket
 import time
 import urllib.robotparser
 from collections.abc import Callable
 from dataclasses import dataclass
-from urllib.parse import urlparse
+from urllib.parse import urljoin, urlparse
 
 import httpx
 
@@ -75,6 +77,7 @@ class FetchResult:
 
 
 RobotsLoader = Callable[[str], bool | None]
+AddressResolver = Callable[[str], list[str]]
 
 
 class Fetcher:
@@ -92,6 +95,7 @@ class Fetcher:
         clock: Callable[[], float] = time.monotonic,
         sleep: Callable[[float], None] = time.sleep,
         robots_loader: RobotsLoader | None = None,
+        address_resolver: AddressResolver | None = None,
         cache: PageCache | None = None,
         cache_ttl_seconds: int = PROFILE_TTL_SECONDS,
     ) -> None:
@@ -104,6 +108,7 @@ class Fetcher:
         self._clock = clock
         self._sleep = sleep
         self._robots_loader = robots_loader or self._load_robots
+        self._address_resolver = address_resolver or self._resolve_addresses
         self._robots_cache: dict[str, bool | None] = {}
         self._last_request_at: dict[str, float] = {}
         self._cache = cache
@@ -115,17 +120,47 @@ class Fetcher:
         if self._client is None:
             self._client = httpx.Client(
                 timeout=self.timeout,
-                follow_redirects=True,
+                follow_redirects=False,
                 headers={"User-Agent": self.user_agent},
             )
         return self._client
+
+    @staticmethod
+    def _resolve_addresses(host: str) -> list[str]:
+        infos = socket.getaddrinfo(host, None, type=socket.SOCK_STREAM)
+        return sorted({str(info[4][0]) for info in infos})
+
+    def _url_safety_error(self, url: str) -> str:
+        parts = urlparse(url)
+        if parts.scheme not in {"http", "https"} or not parts.netloc or not parts.hostname:
+            return "链接必须以 http:// 或 https:// 开头"
+        if parts.username is not None or parts.password is not None:
+            return "链接不能包含账号或密码"
+        try:
+            literal = ipaddress.ip_address(parts.hostname)
+            addresses = [str(literal)]
+        except ValueError:
+            try:
+                addresses = self._address_resolver(parts.hostname)
+            except (OSError, ValueError) as exc:
+                return f"无法确认目标地址是否安全：{exc}"
+        if not addresses:
+            return "无法确认目标地址是否安全"
+        try:
+            if any(not ipaddress.ip_address(address).is_global for address in addresses):
+                return "只允许访问公网地址，不能访问本机或局域网"
+        except ValueError:
+            return "目标域名解析出了无效地址"
+        return ""
 
     def _load_robots(self, url: str) -> bool | None:
         """默认的 robots 读取：拿不到就返回"未知"，不因此彻底阻断。"""
         parts = urlparse(url)
         robots_url = f"{parts.scheme}://{parts.netloc}/robots.txt"
         try:
-            response = self._http().get(robots_url, timeout=self.timeout)
+            response = self._http().get(
+                robots_url, timeout=self.timeout, follow_redirects=False
+            )
         except httpx.HTTPError:
             return None
         if response.status_code == 404:
@@ -166,15 +201,14 @@ class Fetcher:
         last_modified: str | None = None,
     ) -> FetchResult:
         started = self._clock()
-        parts = urlparse(url)
-        if parts.scheme not in {"http", "https"} or not parts.netloc:
+        safety_error = self._url_safety_error(url)
+        if safety_error:
             return FetchResult(
                 url=url,
                 outcome=OUTCOME_UNSAFE_URL,
-                error="链接必须以 http:// 或 https:// 开头",
+                error=safety_error,
                 elapsed_ms=self._elapsed_ms(started),
             )
-
         allowed = self._robots_allowed(url)
         if allowed is False:
             return FetchResult(
@@ -212,9 +246,57 @@ class Fetcher:
         last_error = ""
         for attempt in range(1, self.max_attempts + 1):
             attempts = attempt
-            self._throttle(parts.netloc)
             try:
-                response = self._http().get(url, headers=headers, timeout=self.timeout)
+                current_url = url
+                current_allowed = allowed
+                for _redirect in range(6):
+                    current_parts = urlparse(current_url)
+                    self._throttle(current_parts.netloc)
+                    response = self._http().get(
+                        current_url,
+                        headers=headers,
+                        timeout=self.timeout,
+                        follow_redirects=False,
+                    )
+                    if response.status_code not in {301, 302, 303, 307, 308}:
+                        break
+                    location = response.headers.get("Location")
+                    if not location:
+                        last_error = "跳转响应缺少 Location"
+                        response = None
+                        break
+                    next_url = urljoin(current_url, location)
+                    safety_error = self._url_safety_error(next_url)
+                    if safety_error:
+                        return FetchResult(
+                            url=url,
+                            outcome=OUTCOME_UNSAFE_URL,
+                            final_url=next_url,
+                            robots_allowed=current_allowed,
+                            attempts=attempts,
+                            error=safety_error,
+                            elapsed_ms=self._elapsed_ms(started),
+                        )
+                    current_allowed = self._robots_allowed(next_url)
+                    if current_allowed is False:
+                        return FetchResult(
+                            url=url,
+                            outcome=OUTCOME_ROBOTS_DENIED,
+                            final_url=next_url,
+                            robots_allowed=False,
+                            attempts=attempts,
+                            error=f"robots.txt 禁止抓取 {next_url}",
+                            elapsed_ms=self._elapsed_ms(started),
+                        )
+                    current_url = next_url
+                else:
+                    response = None
+                    last_error = "网页跳转次数过多"
+                if response is None:
+                    if attempt < self.max_attempts:
+                        self._sleep(self.backoff_seconds * attempt)
+                        continue
+                    break
             except httpx.HTTPError as exc:
                 last_error = str(exc)
                 if attempt < self.max_attempts:
@@ -228,7 +310,7 @@ class Fetcher:
                     outcome=OUTCOME_NOT_MODIFIED,
                     final_url=str(response.url),
                     status_code=304,
-                    robots_allowed=allowed,
+                    robots_allowed=current_allowed,
                     from_cache=True,
                     attempts=attempts,
                     elapsed_ms=self._elapsed_ms(started),
@@ -244,7 +326,7 @@ class Fetcher:
                     outcome=OUTCOME_FETCH_FAILED,
                     final_url=str(response.url),
                     status_code=response.status_code,
-                    robots_allowed=allowed,
+                    robots_allowed=current_allowed,
                     attempts=attempts,
                     error=last_error,
                     elapsed_ms=self._elapsed_ms(started),
@@ -258,7 +340,7 @@ class Fetcher:
                     text=text,
                     content_hash=digest,
                     etag=response.headers.get("ETag"),
-                    robots_allowed=allowed,
+                    robots_allowed=current_allowed,
                     ttl_seconds=self.cache_ttl_seconds,
                 )
             return FetchResult(
@@ -268,7 +350,7 @@ class Fetcher:
                 status_code=response.status_code,
                 text=text,
                 content_hash=digest,
-                robots_allowed=allowed,
+                robots_allowed=current_allowed,
                 attempts=attempts,
                 elapsed_ms=self._elapsed_ms(started),
             )

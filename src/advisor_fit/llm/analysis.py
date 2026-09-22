@@ -33,24 +33,6 @@ def generate_deep_analysis(
             {"id": f.id, "field": f.field, "value": f.value}
             for f in student.draftable_facts()
         ],
-        "student_education": [
-            {
-                "degree": e.degree,
-                "institution": e.institution,
-                "major": e.major,
-                "start_year": e.start_year,
-                "end_year": e.end_year,
-            }
-            for e in student.education
-        ],
-        "student_projects": [
-            {"name": p.name, "description": p.description, "role": p.role}
-            for p in student.projects
-        ],
-        "student_publications": [
-            {"title": p.title, "venue": p.venue, "year": p.year}
-            for p in student.publications
-        ],
         "professor_topics": [
             {"topic": t.topic, "evidence_ids": t.evidence_ids}
             for t in [*professor.observed_recent_topics, *professor.declared_interests]
@@ -81,26 +63,38 @@ def sanitize_analysis(
     valid_facts = student.confirmed_fact_ids()
     valid_evs = set(evidence_map)
 
-    def clean(points: list[AnalysisPoint]) -> list[AnalysisPoint]:
+    def clean(
+        points: list[AnalysisPoint], *, require_fact: bool = False,
+        require_evidence: bool = False,
+    ) -> list[AnalysisPoint]:
         result: list[AnalysisPoint] = []
         for point in points:
             if not point.text.strip():
                 continue
-            result.append(
-                AnalysisPoint(
-                    text=point.text.strip(),
-                    fact_ids=[fid for fid in point.fact_ids if fid in valid_facts],
-                    evidence_ids=[eid for eid in point.evidence_ids if eid in valid_evs],
-                )
+            cleaned = AnalysisPoint(
+                text=point.text.strip(),
+                fact_ids=[fid for fid in point.fact_ids if fid in valid_facts],
+                evidence_ids=[eid for eid in point.evidence_ids if eid in valid_evs],
             )
+            if require_fact and not cleaned.fact_ids:
+                continue
+            if require_evidence and not cleaned.evidence_ids:
+                continue
+            result.append(cleaned)
         return result
 
     return DeepAnalysis(
-        research_intersection=clean(analysis.research_intersection),
-        method_match=clean(analysis.method_match),
-        background_gaps=clean(analysis.background_gaps),
-        recommended_papers=clean(analysis.recommended_papers),
-        knowledge_to_supplement=clean(analysis.knowledge_to_supplement),
+        research_intersection=clean(
+            analysis.research_intersection, require_fact=True, require_evidence=True
+        ),
+        method_match=clean(
+            analysis.method_match, require_fact=True, require_evidence=True
+        ),
+        background_gaps=clean(analysis.background_gaps, require_evidence=True),
+        recommended_papers=clean(analysis.recommended_papers, require_evidence=True),
+        knowledge_to_supplement=clean(
+            analysis.knowledge_to_supplement, require_evidence=True
+        ),
     )
 
 
@@ -111,6 +105,20 @@ class DirectionSummary(BaseModel):
 
 
 _DIRECTION_INSTRUCTIONS = prompt_text("direction_summary")
+
+
+def sanitize_direction_summary(
+    summary: DirectionSummary, valid_evidence_ids: set[str]
+) -> DirectionSummary:
+    """没有有效论文引用时不展示研究方向归纳。"""
+    evidence_ids = [
+        evidence_id
+        for evidence_id in summary.evidence_ids
+        if evidence_id in valid_evidence_ids
+    ]
+    if not summary.summary.strip() or not evidence_ids:
+        return DirectionSummary()
+    return summary.model_copy(update={"evidence_ids": evidence_ids})
 
 
 def generate_direction_summary(llm, professor: ProfessorProfile) -> DirectionSummary:

@@ -82,7 +82,34 @@ def _insufficient_report(reason: str) -> MatchReport:
     )
 
 
-def build_match_report(student: StudentProfile, professor: ProfessorProfile) -> MatchReport:
+def _semantic_matches(
+    terms: list[tuple[str, str]],
+    topics: list[tuple[str, list[str]]],
+    embedder,
+) -> list[tuple[str, str, str, list[str], float]]:
+    """字面没命中、但向量够近的配对。
+
+    返回 (fact_id, 学生词, 导师主题, 主题证据 ids, 相似度)。**调用方必须把它
+    与关键词命中分开呈现**——用词相近的证据强度弱于明确命中，混在一起就成了
+    不可解释的加权分。
+    """
+    from advisor_fit.analysis.semantic import similar_pairs  # noqa: PLC0415
+
+    if not terms or not topics:
+        return []
+    pairs = similar_pairs([v for _, v in terms], [t for t, _ in topics], embedder)
+    return [
+        (terms[i][0], terms[i][1], topics[j][0], topics[j][1], score)
+        for i, j, score in pairs
+    ]
+
+
+def build_match_report(
+    student: StudentProfile,
+    professor: ProfessorProfile,
+    *,
+    embedder=None,
+) -> MatchReport:
     draftable = student.draftable_facts()
     if not draftable or not professor.identity_confirmed:
         return _insufficient_report("学生事实未确认或导师身份未确认")
@@ -99,9 +126,19 @@ def build_match_report(student: StudentProfile, professor: ProfessorProfile) -> 
     skill_matches = _match_terms(skills, search_materials)
     interest_matches = _match_terms(interests, search_materials)
 
+    # 关键词一个都没中时，再看向量能不能捞出"用词不同但意思接近"的交集。
+    # 不传 embedder 时这一段完全不执行——行为与从前一致。
+    semantic_pairs: list[tuple[str, str, str, list[str], float]] = []
+    if embedder is not None and not skill_matches and not interest_matches:
+        semantic_pairs = [
+            *_semantic_matches(skills, search_materials, embedder),
+            *_semantic_matches(interests, search_materials, embedder),
+        ]
+
     if skill_matches:
         topic_level = FitLevel.STRONG
-    elif interest_matches:
+    elif interest_matches or semantic_pairs:
+        # 向量召回归 PARTIAL：证据强度弱于明确的关键词命中，不能算 STRONG
         topic_level = FitLevel.PARTIAL
     else:
         topic_level = FitLevel.WEAK
@@ -121,11 +158,17 @@ def build_match_report(student: StudentProfile, professor: ProfessorProfile) -> 
         recommendation = Recommendation.LOW_PRIORITY
 
     all_matches = [*skill_matches, *interest_matches]
+    named_matches = []
+    for _, student_term, professor_term, _ in all_matches:
+        description = f"学生「{student_term}」与导师研究「{professor_term}」形成交集"
+        if description not in named_matches:
+            named_matches.append(description)
+    topic_summary = "；".join(named_matches[:3]) or "现有事实中尚未找到直接研究交集"
     topic_dim = MatchDimension(
         key="research_topic",
         label="研究方向匹配",
         level=topic_level,
-        summary=f"技能命中 {len(skill_matches)} 项、兴趣命中 {len(interest_matches)} 项",
+        summary=topic_summary,
         student_fact_ids=[m[0] for m in all_matches],
         professor_evidence_ids=[ev for m in all_matches for ev in m[3]],
     )
@@ -152,11 +195,37 @@ def build_match_report(student: StudentProfile, professor: ProfessorProfile) -> 
         professor_evidence_ids=[],
     )
     dimensions = [topic_dim, skill_dim, evidence_dim]
+    if semantic_pairs:
+        from advisor_fit.analysis.semantic import (  # noqa: PLC0415
+            vector_field_label,
+            vector_term_label,
+        )
 
+        shown = "、".join(
+            f"{value}≈{topic}" for _, value, topic, _, _ in semantic_pairs[:3]
+        )
+        dimensions.append(
+            MatchDimension(
+                key=vector_field_label(embedder),
+                label=(
+                    "语义相近" if vector_field_label(embedder) == "semantic" else "字面相近"
+                ),
+                level=FitLevel.PARTIAL,
+                summary=f"{vector_term_label(embedder)}：{shown}",
+                student_fact_ids=[fid for fid, *_ in semantic_pairs],
+                professor_evidence_ids=[
+                    eid for *_, evidence_ids, _ in semantic_pairs for eid in evidence_ids
+                ],
+            )
+        )
+
+    # 语义相近的主题不算"未覆盖"——它只是换了个说法，不能说人家没交集
+    covered_by_vector = {topic for *_, topic, _, _ in semantic_pairs}
     gaps = [
         topic
         for topic, _ in topics
-        if not any(_terms_match(value, topic) for _, value in [*skills, *interests])
+        if topic not in covered_by_vector
+        and not any(_terms_match(value, topic) for _, value in [*skills, *interests])
     ]
 
     questions: list[str] = []

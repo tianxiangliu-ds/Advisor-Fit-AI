@@ -9,6 +9,7 @@ from advisor_fit.ingest.manual_professor import (
     ManualPaperInput,
     ManualProfessorInput,
     build_manual_materials,
+    professor_identity_key,
     validate_paper_values,
 )
 
@@ -21,6 +22,7 @@ def _paper(**overrides) -> ManualPaperInput:
         "source_url": "https://doi.org/10.1000/example",
         "source_platform": "DOI",
         "keywords": ["知识图谱", "数字人文"],
+        "authors": ["王老师", "李同学"],
         "user_confirmed": True,
     }
     values.update(overrides)
@@ -71,6 +73,7 @@ def test_manual_materials_preserve_abstract_link_and_keywords():
     assert paper.abstract.startswith("We construct")
     assert paper.source_url == "https://doi.org/10.1000/example"
     assert paper.topics == ["知识图谱", "数字人文"]
+    assert paper.authors == ["王老师", "李同学"]
     assert evidence.evidence_text == paper.abstract
     assert evidence.source_url == paper.source_url
     assert evidence.author_resolution_status == "CONFIRMED"
@@ -114,3 +117,36 @@ def test_validate_paper_values_returns_empty_when_complete():
     assert validate_paper_values(
         [{"title": "T", "abstract": "A", "source_url": "https://x"}]
     ) == []
+
+
+def test_professor_identity_key_is_stable_for_the_same_homepage():
+    first = professor_identity_key(
+        "https://CS.WHU.EDU.CN/teacher/xu/?source=nav",
+        "武汉大学",
+        "计算机学院",
+        "许永超",
+    )
+    second = professor_identity_key(
+        "https://cs.whu.edu.cn/teacher/xu",
+        "另一所学校",
+        "另一学院",
+        "另一姓名",
+    )
+
+    assert first == second
+
+
+def test_professor_identity_key_distinguishes_different_homepages_for_same_name():
+    left = professor_identity_key("https://a.example.edu/people/wang", "武汉大学", "A学院", "王伟")
+    right = professor_identity_key("https://b.example.edu/people/wang", "武汉大学", "A学院", "王伟")
+
+    assert left != right
+
+
+def test_professor_identity_key_falls_back_to_school_department_and_name():
+    first = professor_identity_key(None, "武汉大学", "计算机学院", "王伟")
+    second = professor_identity_key(None, " 武汉大学 ", "计算机学院", "王伟")
+    other = professor_identity_key(None, "武汉大学", "信息管理学院", "王伟")
+
+    assert first == second
+    assert first != other

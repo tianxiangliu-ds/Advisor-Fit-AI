@@ -40,8 +40,19 @@ tests/.ui-full-test-temp/
 
 # 本地 Agent 工具的记忆目录（非项目产物）
 .workbuddy-ai/
+.claude/
+
+# AI 过程计划与采集监控属于本机开发过程，不进入产品仓库
+docs/superpowers/
+scripts/crawl_watchdog.py
+scripts/crawl_watchdog_run.bat
+scripts/install_crawl_watchdog.bat
 
 # UI 参考设计截图（用户本地素材）
 UI_design/
 
 # 导师数据采集与建库工具已独立到 ../advisor-fit-crawl/，本仓库不再包含爬取脚本
+
+# 本机向量模型（上百 MB，按需下载，不入库）
+.models/
+
